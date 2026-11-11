@@ -535,6 +535,52 @@ void Cpu::step() {
 
     if (opcode == 0x90) return;
     if (opcode == 0xF4) { halted_ = true; return; }
+
+    if (opcode == 0x9C) { // PUSHF/PUSHFD
+        push(operand32 ? regs_.eflags : (regs_.eflags & 0xFFFFu), operand32);
+        return;
+    }
+    if (opcode == 0x9D) { // POPF/POPFD
+        const auto value = pop(operand32);
+        if (operand32) regs_.eflags = value | 0x00000002u;
+        else regs_.eflags = (regs_.eflags & 0xFFFF0000u) | (value & 0xFFFFu) | 0x00000002u;
+        return;
+    }
+    if (opcode == 0xCD) { // INT imm8: real-mode IVT dispatch
+        if ((regs_.cr0 & 1u) != 0) {
+            last_error_ = "software interrupt delivery in protected mode is not implemented";
+            halted_ = true;
+            return;
+        }
+        const auto vector = fetch8();
+        const auto return_ip = regs_.eip & mask_for(operand32 ? 32u : 16u);
+        push(operand32 ? regs_.eflags : (regs_.eflags & 0xFFFFu), operand32);
+        push(regs_.cs, operand32);
+        push(return_ip, operand32);
+        regs_.eflags &= ~(Interrupt | Trap);
+
+        const auto vector_address = static_cast<std::uint32_t>(vector) * 4u;
+        const auto target_ip = read16(vector_address);
+        const auto target_cs = read16(vector_address + 2u);
+        if (!load_segment(SegmentIndex::CS, target_cs)) return;
+        regs_.eip = operand32 ? target_ip : (target_ip & 0xFFFFu);
+        return;
+    }
+    if (opcode == 0xCF) { // IRET/IRETD
+        if ((regs_.cr0 & 1u) != 0) {
+            last_error_ = "IRET in protected mode is not implemented";
+            halted_ = true;
+            return;
+        }
+        const auto target_ip = pop(operand32);
+        const auto target_cs = static_cast<std::uint16_t>(pop(operand32));
+        const auto saved_flags = pop(operand32);
+        if (!load_segment(SegmentIndex::CS, target_cs)) return;
+        regs_.eip = operand32 ? target_ip : (target_ip & 0xFFFFu);
+        if (operand32) regs_.eflags = saved_flags | 0x00000002u;
+        else regs_.eflags = (regs_.eflags & 0xFFFF0000u) | (saved_flags & 0xFFFFu) | 0x00000002u;
+        return;
+    }
     if (opcode == 0xFA) { regs_.eflags &= ~Interrupt; return; } // CLI
     if (opcode == 0xFB) { regs_.eflags |= Interrupt; return; }  // STI
     if (opcode == 0xFC) { regs_.eflags &= ~Direction; return; } // CLD

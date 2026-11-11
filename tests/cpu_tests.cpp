@@ -426,6 +426,53 @@ int main() {
     CHECK(cpu.halted());
 
 
+    // Real-mode INT uses the IVT, pushes FLAGS/CS/IP, clears IF/TF,
+    // and IRET restores the saved return address and flags.
+    cpu.reset();
+    constexpr std::array<std::uint8_t, 6> interrupt_caller{
+        0xB8, 0x11, 0x11, // MOV AX,1111h
+        0xCD, 0x10,       // INT 10h
+        0xF4              // HLT
+    };
+    constexpr std::array<std::uint8_t, 4> interrupt_handler{
+        0xB8, 0x34, 0x12, // MOV AX,1234h
+        0xCF              // IRET
+    };
+    cpu.load(interrupt_caller, 0x7C00);
+    cpu.load(interrupt_handler, 0x8000);
+    cpu.write16(0x10u * 4u, 0x8000); // INT 10h offset
+    cpu.write16(0x10u * 4u + 2u, 0x0000); // INT 10h segment
+    regs.cs = 0; regs.ss = 0; regs.esp = 0x7000;
+    regs.eip = 0x7C00; regs.eflags = 0x00000202u;
+    cpu.run(16);
+    CHECK(cpu.registers().eax == 0x1234);
+    CHECK(cpu.registers().cs == 0);
+    CHECK(cpu.registers().eip == 0x7C06);
+    CHECK(cpu.registers().esp == 0x7000);
+    CHECK((cpu.registers().eflags & Cpu::Interrupt) != 0);
+    CHECK(cpu.read16(0x6FFAu) == 0x7C05); // stacked return IP
+    CHECK(cpu.read16(0x6FFCu) == 0x0000); // stacked CS
+    CHECK((cpu.read16(0x6FFEu) & Cpu::Interrupt) != 0); // stacked FLAGS
+    CHECK(cpu.halted());
+    CHECK(cpu.last_error().empty());
+
+    // PUSHF/POPF round-trip the 16-bit flags word while preserving reserved bit 1.
+    cpu.reset();
+    constexpr std::array<std::uint8_t, 4> pushf_popf_program{
+        0xFD, // STD
+        0x9C, // PUSHF
+        0xFC, // CLD
+        0x9D, // POPF
+    };
+    cpu.load(pushf_popf_program, 0x7C00);
+    regs.cs = 0; regs.ss = 0; regs.esp = 0x7000;
+    regs.eip = 0x7C00;
+    cpu.run(4);
+    CHECK((cpu.registers().eflags & Cpu::Direction) != 0);
+    CHECK((cpu.registers().eflags & 0x2u) != 0);
+    CHECK(!cpu.halted());
+    CHECK(cpu.last_error().empty());
+
     // Primary-master ATA IDENTIFY DEVICE, PIO read/write, and error reporting.
     std::vector<std::uint8_t> disk_image(4u * AtaPioDevice::sector_bytes, 0);
     for (std::size_t i = 0; i < AtaPioDevice::sector_bytes; ++i)

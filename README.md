@@ -43,7 +43,7 @@ The instruction budget can be raised for longer boot sectors with --steps N. Def
 
 - Configurable RAM backing store (128 MiB default, 1–2048 MiB selectable).
 - 32-bit general-purpose registers (EAX–EDI), EIP, EFLAGS, and basic control-register state.
-- Real-mode 8-, 16-, and 32-bit instruction paths, initial byte/word/dword MOV operations, ALU operations, branches, stack operations, and 16-bit ModRM effective addresses.
+- Real-mode 8-, 16-, and 32-bit instruction paths, initial byte/word/dword MOV operations, ALU operations, branches, stack operations, 16-bit ModRM effective addresses, IVT-based software INT dispatch, IRET, and PUSHF/POPF.
 - 32-bit ModRM/SIB effective-address decoding and segment overrides.
 - An experimental protected-mode entry subset: LGDT, MOV to/from selected control registers, CR0.PE transition, GDT code/data descriptors, segment-cache reloads, and far jump into a 32-bit code segment.
 - Initial 386 4 KiB paging: CR3 page-directory lookup, 10/10/12 address translation, PDE/PTE present and writable checks, CR0.WP supervisor write protection, CR2 page-fault address reporting, page-fault error-code recording, and page-table accessed/dirty bits.
@@ -56,7 +56,7 @@ The instruction budget can be raised for longer boot sectors with --steps N. Def
 
 ## Important limitations
 
-This is not yet a complete PC/AT-compatible computer. There is no BIOS firmware or BIOS interrupt service implementation, no interrupt controller or timer, no IRQ delivery, no PCI chipset, no keyboard/mouse, no graphics modes beyond the text-memory buffer, and no ATAPI/CD-ROM device. The direct boot handoff does not emulate the BIOS services expected by most existing MBRs or bootloaders. In particular, this is **not an ISO/Windows XP installer boot path**. Privilege-level enforcement, complete segmentation checks, LDT, TSS/task switching, IDT exception delivery, PSE/PAE, and a TLB are also incomplete.
+This is not yet a complete PC/AT-compatible computer. There is no BIOS firmware or BIOS interrupt service implementation (only generic real-mode IVT software interrupts are implemented), no interrupt controller or timer, no IRQ delivery, no PCI chipset, no keyboard/mouse, no graphics modes beyond the text-memory buffer, and no ATAPI/CD-ROM device. The direct boot handoff does not emulate the BIOS services expected by most existing MBRs or bootloaders. In particular, this is **not an ISO/Windows XP installer boot path**. Privilege-level enforcement, complete segmentation checks, LDT, TSS/task switching, IDT exception delivery, PSE/PAE, and a TLB are also incomplete.
 
 The current milestone proves that the CPU executes an actual two-stage 16-bit disk boot chain: guest code reads a second sector from the emulated IDE disk via REP INSW, transfers control to it, and writes to the conventional text buffer. It does not prove BIOS compatibility or Windows compatibility.
 
