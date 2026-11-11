@@ -13,6 +13,7 @@ class Cpu {
 public:
     using IoReadCallback = std::function<std::uint32_t(std::uint16_t, unsigned)>;
     using IoWriteCallback = std::function<void(std::uint16_t, unsigned, std::uint32_t)>;
+    using SoftwareInterruptCallback = std::function<bool(Cpu&, std::uint8_t)>;
 
     static constexpr std::size_t default_ram_size = 128u * 1024u * 1024u;
 
@@ -38,6 +39,7 @@ public:
     void step();
     void run(std::size_t instruction_limit);
     void set_io_callbacks(IoReadCallback read_callback, IoWriteCallback write_callback);
+    void set_software_interrupt_callback(SoftwareInterruptCallback callback);
 
     [[nodiscard]] std::size_t ram_size() const noexcept { return memory_.size(); }
     [[nodiscard]] Registers& registers() noexcept { return regs_; }
@@ -109,6 +111,7 @@ private:
     std::uint64_t tsc_{};
     IoReadCallback io_read_callback_{};
     IoWriteCallback io_write_callback_{};
+    SoftwareInterruptCallback software_interrupt_callback_{};
     Registers regs_{};
     bool halted_{false};
     std::string last_error_{};

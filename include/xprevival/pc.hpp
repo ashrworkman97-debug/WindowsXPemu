@@ -34,8 +34,13 @@ public:
     [[nodiscard]] bool booted() const noexcept { return booted_; }
 
 private:
+    [[nodiscard]] bool handle_bios_interrupt(Cpu& cpu, std::uint8_t vector);
+    void set_interrupt_carry(Cpu& cpu, bool carry) const;
+    void write_teletype_character(Cpu& cpu, std::uint8_t character);
     Cpu cpu_;
     AtaPioDevice ata_;
+    std::uint16_t vga_cursor_{};
+    std::uint8_t video_mode_{3};
     bool booted_{false};
 };
 

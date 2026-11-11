@@ -24,6 +24,10 @@ void Cpu::set_io_callbacks(IoReadCallback read_callback, IoWriteCallback write_c
     io_write_callback_ = write_callback;
 }
 
+void Cpu::set_software_interrupt_callback(SoftwareInterruptCallback callback) {
+    software_interrupt_callback_ = callback;
+}
+
 std::uint32_t Cpu::read_port(std::uint16_t port, unsigned width) {
     const auto mask = mask_for(width);
     if (!io_read_callback_) return mask;
@@ -558,6 +562,20 @@ void Cpu::step() {
         push(regs_.cs, operand32);
         push(return_ip, operand32);
         regs_.eflags &= ~(Interrupt | Trap);
+
+        // A PC-level firmware model may service this interrupt directly.
+        // It sees the CPU after the real interrupt frame has been pushed and
+        // can update the saved FLAGS word before this core performs IRET.
+        if (software_interrupt_callback_ && software_interrupt_callback_(*this, vector)) {
+            const auto target_ip = pop(operand32);
+            const auto target_cs = static_cast<std::uint16_t>(pop(operand32));
+            const auto saved_flags = pop(operand32);
+            if (!load_segment(SegmentIndex::CS, target_cs)) return;
+            regs_.eip = operand32 ? target_ip : (target_ip & 0xFFFFu);
+            if (operand32) regs_.eflags = saved_flags | 0x00000002u;
+            else regs_.eflags = (regs_.eflags & 0xFFFF0000u) | (saved_flags & 0xFFFFu) | 0x00000002u;
+            return;
+        }
 
         const auto vector_address = static_cast<std::uint32_t>(vector) * 4u;
         const auto target_ip = read16(vector_address);
