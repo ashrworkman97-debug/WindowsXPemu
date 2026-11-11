@@ -1,5 +1,6 @@
 #include "xprevival/cpu.hpp"
 
+#include <algorithm>
 #include <stdexcept>
 
 namespace xprevival {
