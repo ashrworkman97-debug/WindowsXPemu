@@ -43,7 +43,7 @@ The instruction budget can be raised for longer boot sectors with --steps N. Def
 
 - Configurable RAM backing store (128 MiB default, 1–2048 MiB selectable).
 - 32-bit general-purpose registers (EAX–EDI), EIP, EFLAGS, and basic control-register state.
-- Real-mode 8-, 16-, and 32-bit instruction paths, initial byte/word/dword MOV operations, ALU operations, branches, stack operations, 16-bit ModRM effective addresses, IVT-based software INT dispatch, IRET, and PUSHF/POPF.
+- Real-mode 8-, 16-, and 32-bit instruction paths, byte/word/dword MOV operations, ALU operations, conditional/loop branches, PUSHA/POPA, immediate and far stack operations, far CALL/RETF, XCHG, TEST, MOVZX/MOVSX, 16-bit ModRM effective addresses, IVT-based software INT dispatch, IRET, and PUSHF/POPF.
 - 32-bit ModRM/SIB effective-address decoding and segment overrides.
 - A native real-mode BIOS service compatibility layer for INT 10h text mode, INT 13h CHS and EDD disk reads, drive geometry, reset, and INT 15h E820/E801 memory reporting. These services execute through real CPU INT stack frames; unhandled vectors use the emulated IVT.
 - An experimental protected-mode entry subset: LGDT, MOV to/from selected control registers, CR0.PE transition, GDT code/data descriptors, segment-cache reloads, and far jump into a 32-bit code segment.

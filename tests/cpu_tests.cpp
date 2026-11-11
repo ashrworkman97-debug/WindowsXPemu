@@ -473,6 +473,109 @@ int main() {
     CHECK(!cpu.halted());
     CHECK(cpu.last_error().empty());
 
+    // PUSHA/POPA preserve the eight 16-bit register slots and restore SP.
+    cpu.reset();
+    constexpr std::array<std::uint8_t, 3> pusha_program{0x60, 0x61, 0xF4};
+    cpu.load(pusha_program, 0x7C00);
+    regs.cs = 0; regs.ss = 0; regs.esp = 0x7000; regs.eip = 0x7C00;
+    regs.eax = 0x12345678; regs.ecx = 0x23456789;
+    regs.edx = 0x3456789A; regs.ebx = 0x456789AB;
+    regs.ebp = 0x56789ABC; regs.esi = 0x6789ABCD; regs.edi = 0x789ABCDE;
+    cpu.run(8);
+    CHECK(cpu.registers().eax == 0x12345678);
+    CHECK(cpu.registers().ecx == 0x23456789);
+    CHECK(cpu.registers().edx == 0x3456789A);
+    CHECK(cpu.registers().ebx == 0x456789AB);
+    CHECK(cpu.registers().ebp == 0x56789ABC);
+    CHECK(cpu.registers().esi == 0x6789ABCD);
+    CHECK(cpu.registers().edi == 0x789ABCDE);
+    CHECK(cpu.registers().esp == 0x7000);
+    CHECK(cpu.halted());
+
+    // Operand-size override selects 32-bit PUSHAD/POPAD slots.
+    cpu.reset();
+    constexpr std::array<std::uint8_t, 5> pushad_program{0x66, 0x60, 0x66, 0x61, 0xF4};
+    cpu.load(pushad_program, 0x7C00);
+    regs.cs = 0; regs.ss = 0; regs.esp = 0x8000; regs.eip = 0x7C00;
+    regs.eax = 0x11223344; regs.ecx = 0x22334455;
+    regs.edx = 0x33445566; regs.ebx = 0x44556677;
+    regs.ebp = 0x55667788; regs.esi = 0x66778899; regs.edi = 0x778899AA;
+    cpu.run(8);
+    CHECK(cpu.registers().eax == 0x11223344);
+    CHECK(cpu.registers().ecx == 0x22334455);
+    CHECK(cpu.registers().edx == 0x33445566);
+    CHECK(cpu.registers().ebx == 0x44556677);
+    CHECK(cpu.registers().ebp == 0x55667788);
+    CHECK(cpu.registers().esi == 0x66778899);
+    CHECK(cpu.registers().edi == 0x778899AA);
+    CHECK(cpu.registers().esp == 0x8000);
+    CHECK(cpu.halted());
+
+    // PUSH sign-extended imm8 and POP AX.
+    cpu.reset();
+    constexpr std::array<std::uint8_t, 4> push_imm_program{0x6A, 0xFF, 0x58, 0xF4};
+    cpu.load(push_imm_program, 0x7C00);
+    regs.cs = 0; regs.ss = 0; regs.esp = 0x7000; regs.eip = 0x7C00;
+    cpu.run(8);
+    CHECK((cpu.registers().eax & 0xFFFFu) == 0xFFFFu);
+    CHECK(cpu.registers().esp == 0x7000);
+    CHECK(cpu.halted());
+
+    // Far CALL transfers to a second code segment and RETF restores CS:IP.
+    cpu.reset();
+    constexpr std::array<std::uint8_t, 6> far_caller{0x9A, 0x00, 0x80, 0x00, 0x00, 0xF4};
+    constexpr std::array<std::uint8_t, 4> far_callee{0xB8, 0x34, 0x12, 0xCB};
+    cpu.load(far_caller, 0x7C00);
+    cpu.load(far_callee, 0x8000);
+    regs.cs = 0; regs.ss = 0; regs.esp = 0x7000; regs.eip = 0x7C00;
+    cpu.run(16);
+    CHECK((cpu.registers().eax & 0xFFFFu) == 0x1234u);
+    CHECK(cpu.registers().cs == 0);
+    CHECK(cpu.registers().eip == 0x7C06);
+    CHECK(cpu.registers().esp == 0x7000);
+    CHECK(cpu.halted());
+    CHECK(cpu.last_error().empty());
+
+    // MOVZX/MOVSX, TEST immediate, XCHG, and LOOP execute in real mode.
+    cpu.reset();
+    constexpr std::array<std::uint8_t, 20> integer_ops_program{
+        0xB0, 0x80,                   // MOV AL,80h
+        0x66, 0x0F, 0xB6, 0xD8,       // MOVZX EBX,AL
+        0x66, 0x0F, 0xBE, 0xC0,       // MOVSX EAX,AL
+        0xA8, 0x80,                   // TEST AL,80h
+        0xB9, 0x03, 0x00,             // MOV CX,3
+        0xE2, 0xFE,                   // LOOP to itself
+        0xF4,                         // HLT
+        0x90                          // NOP padding
+    };
+    cpu.load(integer_ops_program, 0x7C00);
+    regs.cs = 0; regs.eip = 0x7C00;
+    cpu.run(32);
+    CHECK(cpu.registers().eax == 0xFFFFFF80u);
+    CHECK(cpu.registers().ebx == 0x00000080u);
+    CHECK((cpu.registers().ecx & 0xFFFFu) == 0);
+    CHECK((cpu.registers().eflags & Cpu::Sign) != 0);
+    CHECK((cpu.registers().eflags & Cpu::Zero) == 0);
+    CHECK(cpu.halted());
+    CHECK(cpu.last_error().empty());
+
+    // XCHG AX,BX exchanges both values without affecting flags.
+    cpu.reset();
+    constexpr std::array<std::uint8_t, 10> xchg_program{
+        0xB8, 0x34, 0x12, // MOV AX,1234h
+        0xBB, 0x78, 0x56, // MOV BX,5678h
+        0x87, 0xD8,       // XCHG AX,BX
+        0xF4,
+        0x90
+    };
+    cpu.load(xchg_program, 0x7C00);
+    regs.cs = 0; regs.eip = 0x7C00;
+    cpu.run(16);
+    CHECK((cpu.registers().eax & 0xFFFFu) == 0x5678u);
+    CHECK((cpu.registers().ebx & 0xFFFFu) == 0x1234u);
+    CHECK(cpu.halted());
+    CHECK(cpu.last_error().empty());
+
     // Primary-master ATA IDENTIFY DEVICE, PIO read/write, and error reporting.
     std::vector<std::uint8_t> disk_image(4u * AtaPioDevice::sector_bytes, 0);
     for (std::size_t i = 0; i < AtaPioDevice::sector_bytes; ++i)

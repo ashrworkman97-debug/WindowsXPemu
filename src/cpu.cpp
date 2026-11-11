@@ -550,6 +550,32 @@ void Cpu::step() {
         else regs_.eflags = (regs_.eflags & 0xFFFF0000u) | (value & 0xFFFFu) | 0x00000002u;
         return;
     }
+    if (opcode == 0x60) { // PUSHA/PUSHAD
+        const auto original_stack = read_general(4, operand32);
+        push(read_general(0, operand32), operand32);
+        push(read_general(1, operand32), operand32);
+        push(read_general(2, operand32), operand32);
+        push(read_general(3, operand32), operand32);
+        push(original_stack, operand32);
+        push(read_general(5, operand32), operand32);
+        push(read_general(6, operand32), operand32);
+        push(read_general(7, operand32), operand32);
+        return;
+    }
+    if (opcode == 0x61) { // POPA/POPAD
+        write_general(7, operand32, pop(operand32));
+        write_general(6, operand32, pop(operand32));
+        write_general(5, operand32, pop(operand32));
+        (void)pop(operand32);
+        write_general(3, operand32, pop(operand32));
+        write_general(2, operand32, pop(operand32));
+        write_general(1, operand32, pop(operand32));
+        write_general(0, operand32, pop(operand32));
+        return;
+    }
+    if (opcode == 0xF8) { regs_.eflags &= ~Carry; return; }
+    if (opcode == 0xF9) { regs_.eflags |= Carry; return; }
+    if (opcode == 0xF5) { regs_.eflags ^= Carry; return; }
     if (opcode == 0xCD) { // INT imm8: real-mode IVT dispatch
         if ((regs_.cr0 & 1u) != 0) {
             last_error_ = "software interrupt delivery in protected mode is not implemented";
@@ -671,6 +697,21 @@ void Cpu::step() {
             return;
         }
 
+        if (second == 0xB6 || second == 0xB7 || second == 0xBE || second == 0xBF) {
+            Operand rm{};
+            std::uint8_t destination = 0;
+            if (!decode_modrm(rm, destination, address32, has_segment_override, segment_override)) return;
+            const bool source8 = second == 0xB6 || second == 0xBE;
+            const bool sign_extend = second == 0xBE || second == 0xBF;
+            const unsigned source_width = source8 ? 8u : 16u;
+            auto value = read_operand(rm, source_width);
+            if (sign_extend) {
+                if (source_width == 8 && (value & 0x80u) != 0) value |= 0xFFFFFF00u;
+                if (source_width == 16 && (value & 0x8000u) != 0) value |= 0xFFFF0000u;
+            }
+            write_general(destination, operand32, value);
+            return;
+        }
         if (second == 0x01) {
             Operand rm{}; std::uint8_t group = 0;
             if (!decode_modrm(rm, group, address32, has_segment_override, segment_override)) return;
@@ -737,9 +778,42 @@ void Cpu::step() {
         if (carry) regs_.eflags |= Carry; else regs_.eflags &= ~Carry;
         return;
     }
+    if (opcode == 0x68 || opcode == 0x6A) {
+        std::uint32_t value = 0;
+        if (opcode == 0x6A) {
+            const auto signed_value = static_cast<std::int32_t>(static_cast<std::int8_t>(fetch8()));
+            value = operand32 ? static_cast<std::uint32_t>(signed_value)
+                              : static_cast<std::uint16_t>(signed_value);
+        } else {
+            value = operand32 ? fetch32() : fetch16();
+        }
+        push(value, operand32);
+        return;
+    }
     if (opcode >= 0x50 && opcode <= 0x57) { push(read_general(static_cast<std::uint8_t>(opcode - 0x50), operand32), operand32); return; }
     if (opcode >= 0x58 && opcode <= 0x5F) { write_general(static_cast<std::uint8_t>(opcode - 0x58), operand32, pop(operand32)); return; }
 
+    if (opcode >= 0xE0 && opcode <= 0xE3) {
+        const auto displacement = static_cast<std::int8_t>(fetch8());
+        auto count = address32 ? regs_.ecx : (regs_.ecx & 0xFFFFu);
+        bool take = false;
+        if (opcode == 0xE3) {
+            take = count == 0;
+        } else {
+            --count;
+            if (address32) regs_.ecx = count;
+            else regs_.ecx = (regs_.ecx & 0xFFFF0000u) | (count & 0xFFFFu);
+            const bool zero = (regs_.eflags & Zero) != 0;
+            take = count != 0 && (opcode == 0xE2 || (opcode == 0xE1 && zero) ||
+                                  (opcode == 0xE0 && !zero));
+        }
+        if (take) {
+            if (default32) regs_.eip += static_cast<std::uint32_t>(static_cast<std::int32_t>(displacement));
+            else regs_.eip = (regs_.eip & 0xFFFF0000u) |
+                             static_cast<std::uint16_t>(regs_.eip + displacement);
+        }
+        return;
+    }
     if (opcode >= 0x70 && opcode <= 0x7F) {
         const auto displacement = static_cast<std::int8_t>(fetch8());
         if (condition(static_cast<std::uint8_t>(opcode & 0x0Fu))) {
@@ -757,6 +831,36 @@ void Cpu::step() {
         if (opcode == 0xE8) push(regs_.eip & mask_for(operand32 ? 32u : 16u), operand32);
         if (operand32) regs_.eip += static_cast<std::uint32_t>(displacement);
         else regs_.eip = (regs_.eip & 0xFFFF0000u) | static_cast<std::uint16_t>(regs_.eip + displacement);
+        return;
+    }
+    if (opcode == 0x9A) {
+        const auto target = operand32 ? fetch32() : fetch16();
+        const auto selector = fetch16();
+        push(regs_.cs, operand32);
+        push(regs_.eip & mask_for(operand32 ? 32u : 16u), operand32);
+        if (!load_segment(SegmentIndex::CS, selector)) return;
+        regs_.eip = operand32 ? target : (target & 0xFFFFu);
+        return;
+    }
+    if (opcode == 0xCB || opcode == 0xCA) {
+        const auto adjustment = opcode == 0xCA ? fetch16() : 0u;
+        const auto target = pop(operand32);
+        const auto selector = static_cast<std::uint16_t>(pop(operand32));
+        if (!load_segment(SegmentIndex::CS, selector)) return;
+        regs_.eip = operand32 ? target : (target & 0xFFFFu);
+        if (adjustment != 0) {
+            if (segments_[static_cast<std::size_t>(SegmentIndex::SS)].default32) regs_.esp += adjustment;
+            else regs_.esp = (regs_.esp & 0xFFFF0000u) | ((regs_.esp + adjustment) & 0xFFFFu);
+        }
+        return;
+    }
+    if (opcode == 0xC2) {
+        const auto adjustment = fetch16();
+        const auto target = pop(operand32);
+        if (operand32) regs_.eip = target;
+        else regs_.eip = (regs_.eip & 0xFFFF0000u) | (target & 0xFFFFu);
+        if (segments_[static_cast<std::size_t>(SegmentIndex::SS)].default32) regs_.esp += adjustment;
+        else regs_.esp = (regs_.esp & 0xFFFF0000u) | ((regs_.esp + adjustment) & 0xFFFFu);
         return;
     }
     if (opcode == 0xC3) {
@@ -802,6 +906,18 @@ void Cpu::step() {
         return;
     }
 
+    if (opcode == 0x86 || opcode == 0x87) {
+        Operand rm{};
+        std::uint8_t reg = 0;
+        if (!decode_modrm(rm, reg, address32, has_segment_override, segment_override)) return;
+        const unsigned width = opcode == 0x86 ? 8u : (operand32 ? 32u : 16u);
+        const Operand reg_operand{true, reg, 0};
+        const auto rm_value = read_operand(rm, width);
+        const auto reg_value = read_operand(reg_operand, width);
+        write_operand(rm, width, reg_value);
+        write_operand(reg_operand, width, rm_value);
+        return;
+    }
     // MOV between register and register/memory, including byte operands.
     if (opcode >= 0x88 && opcode <= 0x8B) {
         Operand rm{}; std::uint8_t reg = 0;
@@ -825,6 +941,22 @@ void Cpu::step() {
         return;
     }
 
+    if (opcode == 0x84 || opcode == 0x85) {
+        Operand rm{};
+        std::uint8_t reg = 0;
+        if (!decode_modrm(rm, reg, address32, has_segment_override, segment_override)) return;
+        const unsigned width = opcode == 0x84 ? 8u : (operand32 ? 32u : 16u);
+        const Operand reg_operand{true, reg, 0};
+        logic_flags(read_operand(rm, width) & read_operand(reg_operand, width), width);
+        return;
+    }
+    if (opcode == 0xA8 || opcode == 0xA9) {
+        const unsigned width = opcode == 0xA8 ? 8u : (operand32 ? 32u : 16u);
+        const auto immediate = width == 8 ? fetch8() : (width == 16 ? fetch16() : fetch32());
+        const Operand accumulator{true, 0, 0};
+        logic_flags(read_operand(accumulator, width) & immediate, width);
+        return;
+    }
     // ADD, OR, AND, SUB, XOR, CMP with register/memory operands.
     const auto alu_base = static_cast<std::uint8_t>(opcode & 0xF8u);
     if ((opcode & 0x04u) == 0 &&
