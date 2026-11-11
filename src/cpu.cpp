@@ -23,6 +23,10 @@ void Cpu::reset() {
     std::fill(memory_.begin(), memory_.end(), std::uint8_t{0});
     regs_ = {};
     regs_.eflags = 0x00000002;
+    segments_[0] = {}; segments_[1] = {}; segments_[2] = {};
+    segments_[3] = {}; segments_[4] = {}; segments_[5] = {};
+    gdtr_base_ = 0;
+    gdtr_limit_ = 0;
     halted_ = false;
     last_error_.clear();
     set_reset_state();
@@ -41,8 +45,111 @@ void Cpu::load(std::span<const std::uint8_t> bytes, std::uint32_t address) {
     std::copy(bytes.begin(), bytes.end(), memory_.begin() + address);
 }
 
-std::uint32_t Cpu::physical(std::uint16_t segment, std::uint16_t offset) const noexcept {
-    return (static_cast<std::uint32_t>(segment) << 4) + offset;
+std::uint32_t Cpu::physical(SegmentIndex segment, std::uint32_t offset) const noexcept {
+    if ((regs_.cr0 & 1u) == 0) {
+        std::uint16_t selector = 0;
+        switch (segment) {
+            case SegmentIndex::ES: selector = regs_.es; break;
+            case SegmentIndex::CS: selector = regs_.cs; break;
+            case SegmentIndex::SS: selector = regs_.ss; break;
+            case SegmentIndex::DS: selector = regs_.ds; break;
+            case SegmentIndex::FS: selector = regs_.fs; break;
+            case SegmentIndex::GS: selector = regs_.gs; break;
+        }
+        return (static_cast<std::uint32_t>(selector) << 4) + offset;
+    }
+    return segments_[static_cast<std::size_t>(segment)].base + offset;
+}
+
+bool Cpu::load_segment(SegmentIndex segment, std::uint16_t selector) {
+    auto& cache = segments_[static_cast<std::size_t>(segment)];
+    const auto set_selector = [this, segment, selector]() {
+        switch (segment) {
+            case SegmentIndex::ES: regs_.es = selector; break;
+            case SegmentIndex::CS: regs_.cs = selector; break;
+            case SegmentIndex::SS: regs_.ss = selector; break;
+            case SegmentIndex::DS: regs_.ds = selector; break;
+            case SegmentIndex::FS: regs_.fs = selector; break;
+            case SegmentIndex::GS: regs_.gs = selector; break;
+        }
+    };
+
+    if ((regs_.cr0 & 1u) == 0) {
+        cache.base = static_cast<std::uint32_t>(selector) << 4;
+        cache.limit = 0xFFFF;
+        cache.default32 = false;
+        cache.valid = true;
+        set_selector();
+        return true;
+    }
+
+    const bool nullable = segment == SegmentIndex::ES || segment == SegmentIndex::DS ||
+                          segment == SegmentIndex::FS || segment == SegmentIndex::GS;
+    if ((selector & 0xFFF8u) == 0) {
+        if (!nullable) {
+            last_error_ = "null selector is not valid for CS or SS";
+            halted_ = true;
+            return false;
+        }
+        cache = {0, 0, false, false};
+        set_selector();
+        return true;
+    }
+    if ((selector & 0x4u) != 0) {
+        last_error_ = "LDT selectors are not implemented; use a GDT selector";
+        halted_ = true;
+        return false;
+    }
+
+    const auto descriptor_offset = static_cast<std::uint32_t>(selector & 0xFFF8u);
+    if (descriptor_offset + 7u > gdtr_limit_) {
+        last_error_ = "segment selector lies outside the current GDT limit";
+        halted_ = true;
+        return false;
+    }
+    const auto address = gdtr_base_ + descriptor_offset;
+    const auto limit_low = read16(address);
+    const auto base_low = read16(address + 2);
+    const auto base_mid = read8(address + 4);
+    const auto access = read8(address + 5);
+    const auto flags_limit = read8(address + 6);
+    const auto base_high = read8(address + 7);
+
+    if ((access & 0x80u) == 0 || (access & 0x10u) == 0) {
+        last_error_ = "GDT descriptor is not a present code/data segment";
+        halted_ = true;
+        return false;
+    }
+    const bool code = (access & 0x08u) != 0;
+    const bool readable_or_writable = (access & 0x02u) != 0;
+    if (segment == SegmentIndex::CS && !code) {
+        last_error_ = "CS requires an executable code descriptor";
+        halted_ = true;
+        return false;
+    }
+    if (segment == SegmentIndex::SS && (code || !readable_or_writable)) {
+        last_error_ = "SS requires a writable data descriptor";
+        halted_ = true;
+        return false;
+    }
+    if (segment != SegmentIndex::CS && segment != SegmentIndex::SS && code && !readable_or_writable) {
+        last_error_ = "data segment cannot load an execute-only code descriptor";
+        halted_ = true;
+        return false;
+    }
+
+    std::uint32_t limit = static_cast<std::uint32_t>(limit_low) |
+                          (static_cast<std::uint32_t>(flags_limit & 0x0Fu) << 16);
+    if ((flags_limit & 0x80u) != 0) limit = (limit << 12) | 0xFFFu;
+    const auto base = static_cast<std::uint32_t>(base_low) |
+                      (static_cast<std::uint32_t>(base_mid) << 16) |
+                      (static_cast<std::uint32_t>(base_high) << 24);
+    cache.base = base;
+    cache.limit = limit;
+    cache.default32 = (flags_limit & 0x40u) != 0;
+    cache.valid = true;
+    set_selector();
+    return true;
 }
 
 std::uint8_t Cpu::read8(std::uint32_t address) const {
@@ -69,8 +176,11 @@ void Cpu::write32(std::uint32_t address, std::uint32_t value) {
 }
 
 std::uint8_t Cpu::fetch8() {
-    const auto value = read8(physical(regs_.cs, static_cast<std::uint16_t>(regs_.eip)));
-    regs_.eip = (regs_.eip & 0xFFFF0000u) | ((regs_.eip + 1u) & 0xFFFFu);
+    const bool code32 = segments_[static_cast<std::size_t>(SegmentIndex::CS)].default32;
+    const auto offset = code32 ? regs_.eip : (regs_.eip & 0xFFFFu);
+    const auto value = read8(physical(SegmentIndex::CS, offset));
+    if (code32) ++regs_.eip;
+    else regs_.eip = (regs_.eip & 0xFFFF0000u) | ((regs_.eip + 1u) & 0xFFFFu);
     return value;
 }
 std::uint16_t Cpu::fetch16() {
@@ -116,7 +226,7 @@ void Cpu::write_byte_register(std::uint8_t index, std::uint8_t value) noexcept {
 }
 
 bool Cpu::decode_modrm(Operand& rm, std::uint8_t& reg, bool address32,
-                       bool has_segment_override, std::uint16_t segment_override) {
+                       bool has_segment_override, SegmentIndex segment_override) {
     const auto modrm = fetch8();
     const auto mod = static_cast<std::uint8_t>(modrm >> 6);
     reg = static_cast<std::uint8_t>((modrm >> 3) & 7u);
@@ -126,9 +236,38 @@ bool Cpu::decode_modrm(Operand& rm, std::uint8_t& reg, bool address32,
         return true;
     }
     if (address32) {
-        last_error_ = "32-bit ModRM addressing is not implemented yet";
-        halted_ = true;
-        return false;
+        std::uint32_t base = 0;
+        std::uint32_t index_value = 0;
+        bool uses_stack_segment = false;
+        bool has_base = true;
+        if (rmi == 4) {
+            const auto sib = fetch8();
+            const auto scale = static_cast<std::uint8_t>(sib >> 6);
+            const auto index = static_cast<std::uint8_t>((sib >> 3) & 7u);
+            const auto base_index = static_cast<std::uint8_t>(sib & 7u);
+            if (index != 4) index_value = read_general(index, true) << scale;
+            if (mod == 0 && base_index == 5) has_base = false;
+            else {
+                base = read_general(base_index, true);
+                uses_stack_segment = base_index == 4 || base_index == 5;
+            }
+        } else if (mod == 0 && rmi == 5) {
+            has_base = false;
+        } else {
+            base = read_general(rmi, true);
+            uses_stack_segment = rmi == 4 || rmi == 5;
+        }
+
+        std::int32_t displacement = 0;
+        if (!has_base) displacement = static_cast<std::int32_t>(fetch32());
+        else if (mod == 1) displacement = static_cast<std::int8_t>(fetch8());
+        else if (mod == 2) displacement = static_cast<std::int32_t>(fetch32());
+
+        const auto offset = base + index_value + static_cast<std::uint32_t>(displacement);
+        const auto segment = has_segment_override ? segment_override :
+            (uses_stack_segment ? SegmentIndex::SS : SegmentIndex::DS);
+        rm = {false, 0, physical(segment, offset)};
+        return true;
     }
 
     std::uint32_t base = 0;
@@ -153,7 +292,7 @@ bool Cpu::decode_modrm(Operand& rm, std::uint8_t& reg, bool address32,
     else if (mod == 2) displacement = static_cast<std::int16_t>(fetch16());
 
     const auto offset = static_cast<std::uint16_t>(base + displacement);
-    const auto segment = has_segment_override ? segment_override : (uses_bp ? regs_.ss : regs_.ds);
+    const auto segment = has_segment_override ? segment_override : (uses_bp ? SegmentIndex::SS : SegmentIndex::DS);
     rm = {false, 0, physical(segment, offset)};
     return true;
 }
@@ -222,37 +361,44 @@ bool Cpu::condition(std::uint8_t code) const noexcept {
     return false;
 }
 void Cpu::push(std::uint32_t value, bool operand32) {
-    auto sp = static_cast<std::uint16_t>(regs_.esp & 0xFFFFu);
-    sp = static_cast<std::uint16_t>(sp - (operand32 ? 4u : 2u));
-    regs_.esp = (regs_.esp & 0xFFFF0000u) | sp;
-    if (operand32) write32(physical(regs_.ss, sp), value);
-    else write16(physical(regs_.ss, sp), static_cast<std::uint16_t>(value));
+    const bool stack32 = segments_[static_cast<std::size_t>(SegmentIndex::SS)].default32;
+    std::uint32_t pointer = stack32 ? regs_.esp : (regs_.esp & 0xFFFFu);
+    pointer -= operand32 ? 4u : 2u;
+    if (stack32) regs_.esp = pointer;
+    else regs_.esp = (regs_.esp & 0xFFFF0000u) | (pointer & 0xFFFFu);
+    const auto address = physical(SegmentIndex::SS, pointer);
+    if (operand32) write32(address, value);
+    else write16(address, static_cast<std::uint16_t>(value));
 }
 std::uint32_t Cpu::pop(bool operand32) {
-    const auto sp = static_cast<std::uint16_t>(regs_.esp & 0xFFFFu);
-    const auto address = physical(regs_.ss, sp);
+    const bool stack32 = segments_[static_cast<std::size_t>(SegmentIndex::SS)].default32;
+    const std::uint32_t pointer = stack32 ? regs_.esp : (regs_.esp & 0xFFFFu);
+    const auto address = physical(SegmentIndex::SS, pointer);
     const auto value = operand32 ? read32(address) : read16(address);
-    regs_.esp = (regs_.esp & 0xFFFF0000u) | static_cast<std::uint16_t>(sp + (operand32 ? 4u : 2u));
+    const auto next = pointer + (operand32 ? 4u : 2u);
+    if (stack32) regs_.esp = next;
+    else regs_.esp = (regs_.esp & 0xFFFF0000u) | (next & 0xFFFFu);
     return value;
 }
 
 void Cpu::step() {
     if (halted_) return;
-    bool operand32 = false, address32 = false, has_segment_override = false;
-    std::uint16_t segment_override = 0;
+    const bool default32 = segments_[static_cast<std::size_t>(SegmentIndex::CS)].default32;
+    bool operand32 = default32, address32 = default32, has_segment_override = false;
+    SegmentIndex segment_override = SegmentIndex::DS;
     std::uint8_t opcode = fetch8();
     std::size_t prefix_count = 0;
     while (prefix_count < 15) {
         bool consumed = true;
         switch (opcode) {
-            case 0x66: operand32 = true; break;
-            case 0x67: address32 = true; break;
-            case 0x26: segment_override = regs_.es; has_segment_override = true; break;
-            case 0x2E: segment_override = regs_.cs; has_segment_override = true; break;
-            case 0x36: segment_override = regs_.ss; has_segment_override = true; break;
-            case 0x3E: segment_override = regs_.ds; has_segment_override = true; break;
-            case 0x64: segment_override = regs_.fs; has_segment_override = true; break;
-            case 0x65: segment_override = regs_.gs; has_segment_override = true; break;
+            case 0x66: operand32 = !default32; break;
+            case 0x67: address32 = !default32; break;
+            case 0x26: segment_override = SegmentIndex::ES; has_segment_override = true; break;
+            case 0x2E: segment_override = SegmentIndex::CS; has_segment_override = true; break;
+            case 0x36: segment_override = SegmentIndex::SS; has_segment_override = true; break;
+            case 0x3E: segment_override = SegmentIndex::DS; has_segment_override = true; break;
+            case 0x64: segment_override = SegmentIndex::FS; has_segment_override = true; break;
+            case 0x65: segment_override = SegmentIndex::GS; has_segment_override = true; break;
             default: consumed = false; break;
         }
         if (!consumed) break;
@@ -283,6 +429,60 @@ void Cpu::step() {
 
     if (opcode == 0x90) return;
     if (opcode == 0xF4) { halted_ = true; return; }
+
+    if (opcode == 0x0F) {
+        const auto second = fetch8();
+        if (second == 0x20 || second == 0x22) {
+            const auto modrm = fetch8();
+            if ((modrm & 0xC0u) != 0xC0u) {
+                last_error_ = "MOV control-register form requires a general-purpose register";
+                halted_ = true;
+                return;
+            }
+            const auto control = static_cast<std::uint8_t>((modrm >> 3) & 7u);
+            const auto general = static_cast<std::uint8_t>(modrm & 7u);
+            if (second == 0x20) {
+                std::uint32_t value = 0;
+                switch (control) {
+                    case 0: value = regs_.cr0; break;
+                    case 2: value = regs_.cr2; break;
+                    case 3: value = regs_.cr3; break;
+                    case 4: value = regs_.cr4; break;
+                    default: last_error_ = "unsupported control register read"; halted_ = true; return;
+                }
+                write_general(general, true, value);
+            } else {
+                const auto value = read_general(general, true);
+                switch (control) {
+                    case 0: regs_.cr0 = value; break;
+                    case 2: regs_.cr2 = value; break;
+                    case 3: regs_.cr3 = value; break;
+                    case 4: regs_.cr4 = value; break;
+                    default: last_error_ = "unsupported control register write"; halted_ = true; return;
+                }
+            }
+            return;
+        }
+
+        if (second == 0x01) {
+            Operand rm{}; std::uint8_t group = 0;
+            if (!decode_modrm(rm, group, address32, has_segment_override, segment_override)) return;
+            if (rm.is_register || group != 2) {
+                last_error_ = "only LGDT m16&32 is implemented for 0F 01";
+                halted_ = true;
+                return;
+            }
+            gdtr_limit_ = read16(rm.address);
+            if (operand32) gdtr_base_ = read32(rm.address + 2);
+            else gdtr_base_ = static_cast<std::uint32_t>(read8(rm.address + 2)) |
+                              (static_cast<std::uint32_t>(read16(rm.address + 3)) << 8);
+            return;
+        }
+
+        last_error_ = "unsupported 0F opcode";
+        halted_ = true;
+        return;
+    }
 
     if (opcode >= 0xB0 && opcode <= 0xB7) {
         write_byte_register(static_cast<std::uint8_t>(opcode - 0xB0), fetch8());
@@ -334,6 +534,42 @@ void Cpu::step() {
     }
     if (opcode == 0xC3) {
         const auto target = pop(operand32);
+        if (operand32) regs_.eip = target;
+        else regs_.eip = (regs_.eip & 0xFFFF0000u) | (target & 0xFFFFu);
+        return;
+    }
+
+    if (opcode == 0x8E || opcode == 0x8C) {
+        Operand rm{}; std::uint8_t segment_reg = 0;
+        if (!decode_modrm(rm, segment_reg, address32, has_segment_override, segment_override)) return;
+        if (segment_reg > 5 || (opcode == 0x8E && segment_reg == 1)) {
+            last_error_ = "invalid segment-register MOV encoding";
+            halted_ = true;
+            return;
+        }
+        const auto target_segment = static_cast<SegmentIndex>(segment_reg);
+        if (opcode == 0x8E) {
+            const auto selector = static_cast<std::uint16_t>(read_operand(rm, 16));
+            (void)load_segment(target_segment, selector);
+        } else {
+            std::uint16_t selector = 0;
+            switch (target_segment) {
+                case SegmentIndex::ES: selector = regs_.es; break;
+                case SegmentIndex::CS: selector = regs_.cs; break;
+                case SegmentIndex::SS: selector = regs_.ss; break;
+                case SegmentIndex::DS: selector = regs_.ds; break;
+                case SegmentIndex::FS: selector = regs_.fs; break;
+                case SegmentIndex::GS: selector = regs_.gs; break;
+            }
+            write_operand(rm, 16, selector);
+        }
+        return;
+    }
+
+    if (opcode == 0xEA) {
+        const auto target = operand32 ? fetch32() : fetch16();
+        const auto selector = fetch16();
+        if (!load_segment(SegmentIndex::CS, selector)) return;
         if (operand32) regs_.eip = target;
         else regs_.eip = (regs_.eip & 0xFFFF0000u) | (target & 0xFFFFu);
         return;
@@ -417,11 +653,10 @@ void Cpu::step() {
         return;
     }
 
-    // Moffs accumulator transfers (A0-A3), using a 16-bit real-mode offset.
+    // Moffs accumulator transfers (A0-A3).
     if (opcode >= 0xA0 && opcode <= 0xA3) {
-        if (address32) { last_error_ = "32-bit moffs addressing is not implemented yet"; halted_ = true; return; }
-        const auto offset = fetch16();
-        const auto segment = has_segment_override ? segment_override : regs_.ds;
+        const auto offset = address32 ? fetch32() : fetch16();
+        const auto segment = has_segment_override ? segment_override : SegmentIndex::DS;
         const auto address = physical(segment, offset);
         const bool byte_width = (opcode & 1u) == 0;
         const bool load = (opcode & 2u) == 0;
