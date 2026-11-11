@@ -39,14 +39,15 @@ RAM can be selected from 1 to 2048 MiB. The default is 128 MiB. The current comm
 - Real-mode 8-, 16-, and 32-bit instruction paths, initial byte/word/dword MOV operations, ALU operations, branches, stack operations, and 16-bit ModRM effective addresses.
 - 32-bit ModRM/SIB effective-address decoding and segment overrides.
 - An experimental protected-mode entry subset: LGDT, MOV to/from selected control registers, CR0.PE transition, GDT code/data descriptors, segment-cache reloads, and far jump into a 32-bit code segment.
+- Initial 386 4 KiB paging: CR3 page-directory lookup, 10/10/12 address translation, PDE/PTE present and writable checks, CR0.WP supervisor write protection, CR2 page-fault address reporting, page-fault error-code recording, and page-table accessed/dirty bits. Tests exercise a mapped non-identity page and a missing-page fault.
 
 ## Major missing pieces
 
-This is not a complete 386 implementation. Privilege checks, full segmentation faults and limit enforcement, LDT, TSS/task switching, IDT and interrupt/exception delivery, paging, A20 behavior, firmware/BIOS services, PCI, PIT/PIC, IDE/ATAPI, VGA, keyboard, mouse, and CD-ROM boot are not implemented. CR0.PG is deliberately rejected. Windows XP cannot be installed or run yet.
+This is not a complete 386 implementation. Privilege-level enforcement, full segmentation faults and limit enforcement, LDT, TSS/task switching, IDT and interrupt/exception delivery (page faults are recorded and halt the prototype rather than being dispatched through the IDT), PSE/4 MiB pages, PAE, a TLB, A20 behavior, firmware/BIOS services, PCI, PIT/PIC, IDE/ATAPI, VGA, keyboard, mouse, and CD-ROM boot are not implemented. Windows XP cannot be installed or run yet.
 
 ## Project direction
 
-1. Expand and test the 386 CPU core and protected-mode behavior.
+1. Expand the 386 CPU core, segmentation, paging, privilege checks, and exception delivery.
 2. Add firmware mapping and BIOS boot services.
 3. Implement a PC chipset and bootable floppy/IDE/ATAPI devices.
 4. Add VGA-compatible video and keyboard/mouse input.

@@ -4,9 +4,50 @@
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
+#include <span>
 #include <stdexcept>
 
 namespace {
+
+void install_paging_bootstrap(xprevival::Cpu& cpu, std::span<const std::uint8_t> protected_code,
+                              bool map_test_page) {
+    constexpr std::array<std::uint8_t, 8> code_descriptor{
+        0xFF, 0xFF, 0x00, 0x00, 0x00, 0x9A, 0xCF, 0x00
+    };
+    constexpr std::array<std::uint8_t, 8> data_descriptor{
+        0xFF, 0xFF, 0x00, 0x00, 0x00, 0x92, 0xCF, 0x00
+    };
+    for (std::size_t i = 0; i < 8; ++i) {
+        cpu.write8(0x0508u + static_cast<std::uint32_t>(i), code_descriptor[i]);
+        cpu.write8(0x0510u + static_cast<std::uint32_t>(i), data_descriptor[i]);
+    }
+    cpu.write16(0x0600, 0x0017);
+    cpu.write32(0x0602, 0x00000500);
+
+    constexpr std::array<std::uint8_t, 22> real_mode_bootstrap{
+        0x0F, 0x01, 0x16, 0x00, 0x06,
+        0x0F, 0x20, 0xC0,
+        0x66, 0x0D, 0x01, 0x00, 0x00, 0x00,
+        0x0F, 0x22, 0xC0,
+        0xEA, 0x20, 0x7C, 0x08, 0x00
+    };
+    cpu.load(real_mode_bootstrap, 0x7C00);
+    cpu.load(protected_code, 0x7C20);
+
+    cpu.write32(0x1000, 0x00002003); // PDE 0
+    cpu.write32(0x1004, 0x00003003); // PDE 1
+    cpu.write32(0x2000, 0x00000003); // identity map page 0
+    cpu.write32(0x201C, 0x00007003); // identity map code page 7
+    if (map_test_page) cpu.write32(0x300C, 0x00008003); // 00403000h -> 8000h
+    cpu.write32(0x8000, 0xCAFEBABEu);
+
+    auto& regs = cpu.registers();
+    regs.cs = 0;
+    regs.ds = 0;
+    regs.ss = 0;
+    regs.eip = 0x7C00;
+}
+
 void check(bool condition, const char* expression, int line) {
     if (!condition) {
         std::cerr << "CHECK failed on line " << line << ": " << expression << '\n';
@@ -141,6 +182,53 @@ int main() {
     CHECK((cpu.registers().eflags & Cpu::Zero) != 0);
     CHECK(cpu.halted());
     CHECK(cpu.last_error().empty());
+
+
+    // 386 protected mode + 4 KiB paging: access a non-identity-mapped page,
+    // then write it and inspect the page-table accessed/dirty bits.
+    cpu.reset();
+    constexpr std::array<std::uint8_t, 38> paged_program{
+        0xB8, 0x10, 0x00, 0x00, 0x00, // MOV EAX,0010h
+        0x8E, 0xD8,                   // MOV DS,AX
+        0x8E, 0xD0,                   // MOV SS,AX
+        0xB8, 0x00, 0x10, 0x00, 0x00, // MOV EAX,1000h
+        0x0F, 0x22, 0xD8,             // MOV CR3,EAX
+        0xB8, 0x01, 0x00, 0x00, 0x80, // MOV EAX,80000001h
+        0x0F, 0x22, 0xC0,             // MOV CR0,EAX (enable paging)
+        0x8B, 0x05, 0x00, 0x30, 0x40, 0x00, // MOV EAX,[00403000h]
+        0x89, 0x05, 0x04, 0x30, 0x40, 0x00, // MOV [00403004h],EAX
+        0xF4                          // HLT
+    };
+    install_paging_bootstrap(cpu, paged_program, true);
+    cpu.run(64);
+    CHECK(cpu.halted());
+    CHECK(cpu.last_error().empty());
+    CHECK(cpu.registers().eax == 0xCAFEBABEu);
+    CHECK(cpu.read32(0x8004) == 0xCAFEBABEu);
+    CHECK((cpu.registers().cr0 & 0x80000001u) == 0x80000001u);
+    CHECK((cpu.read32(0x1000) & 0x20u) != 0); // PDE accessed
+    CHECK((cpu.read32(0x201C) & 0x20u) != 0); // code PTE accessed
+    CHECK((cpu.read32(0x1004) & 0x20u) != 0); // data PDE accessed
+    CHECK((cpu.read32(0x300C) & 0x60u) == 0x60u); // data PTE accessed + dirty
+
+    // An absent PTE records CR2 and the non-present read page-fault code.
+    cpu.reset();
+    constexpr std::array<std::uint8_t, 31> fault_program{
+        0xB8, 0x10, 0x00, 0x00, 0x00, // MOV EAX,0010h
+        0x8E, 0xD8,                   // MOV DS,AX
+        0x8E, 0xD0,                   // MOV SS,AX
+        0xB8, 0x00, 0x10, 0x00, 0x00, // MOV EAX,1000h
+        0x0F, 0x22, 0xD8,             // MOV CR3,EAX
+        0xB8, 0x01, 0x00, 0x00, 0x80, // MOV EAX,80000001h
+        0x0F, 0x22, 0xC0,             // MOV CR0,EAX
+        0x8B, 0x05, 0x00, 0x00, 0x40, 0x00 // MOV EAX,[00400000h]
+    };
+    install_paging_bootstrap(cpu, fault_program, false);
+    cpu.run(64);
+    CHECK(cpu.halted());
+    CHECK(cpu.registers().cr2 == 0x00400000u);
+    CHECK(cpu.last_page_fault_error_code() == 0u);
+    CHECK(cpu.last_error().find("page fault") != std::string::npos);
 
     // The RAM backing store reaches beyond the original 1 MiB limit.
     cpu.write32(2u * 1024u * 1024u, 0xDEADBEEFu);
