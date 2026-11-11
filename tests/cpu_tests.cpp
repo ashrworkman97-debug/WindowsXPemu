@@ -1,3 +1,4 @@
+#include "xprevival/ata_pio.hpp"
 #include "xprevival/cpu.hpp"
 
 #include <array>
@@ -6,6 +7,7 @@
 #include <iostream>
 #include <span>
 #include <stdexcept>
+#include <vector>
 
 namespace {
 
@@ -420,6 +422,97 @@ int main() {
     CHECK((cpu.registers().eflags & Cpu::Interrupt) != 0);
     CHECK((cpu.registers().eflags & Cpu::Direction) == 0);
     CHECK(cpu.halted());
+
+
+    // Primary-master ATA IDENTIFY DEVICE, PIO read/write, and error reporting.
+    std::vector<std::uint8_t> disk_image(4u * AtaPioDevice::sector_bytes, 0);
+    for (std::size_t i = 0; i < AtaPioDevice::sector_bytes; ++i)
+        disk_image[AtaPioDevice::sector_bytes + i] = static_cast<std::uint8_t>(i);
+    AtaPioDevice ata(std::move(disk_image));
+    CHECK(ata.status() == 0x50);
+
+    ata.write_port(0x1F6, 8, 0xE0); // Master, LBA mode.
+    ata.write_port(0x1F7, 8, 0xEC); // IDENTIFY DEVICE.
+    CHECK((ata.read_port(0x1F7, 8) & 0x08u) != 0);
+    std::uint16_t identify_word0 = 0;
+    std::uint16_t identify_model_first_word = 0;
+    std::uint16_t identify_sector_count = 0;
+    for (std::size_t i = 0; i < 256; ++i) {
+        const auto word = static_cast<std::uint16_t>(ata.read_port(0x1F0, 16));
+        if (i == 0) identify_word0 = word;
+        if (i == 27) identify_model_first_word = word;
+        if (i == 60) identify_sector_count = word;
+    }
+    CHECK(identify_word0 == 0x0040);
+    CHECK(identify_model_first_word == 0x5850); // "XP", ATA word byte order.
+    CHECK(identify_sector_count == 4);
+    CHECK((ata.read_port(0x1F7, 8) & 0x08u) == 0);
+
+    // READ SECTORS returns the chosen sector as little-endian 16-bit words.
+    ata.write_port(0x1F2, 8, 1);
+    ata.write_port(0x1F3, 8, 1); // LBA 1
+    ata.write_port(0x1F4, 8, 0);
+    ata.write_port(0x1F5, 8, 0);
+    ata.write_port(0x1F7, 8, 0x20);
+    CHECK((ata.read_port(0x1F7, 8) & 0x08u) != 0);
+    CHECK(ata.read_port(0x1F0, 16) == 0x0100);
+    for (std::size_t i = 1; i < 256; ++i) (void)ata.read_port(0x1F0, 16);
+    CHECK((ata.read_port(0x1F7, 8) & 0x08u) == 0);
+    CHECK(ata.read_port(0x1F2, 8) == 0);
+
+    // WRITE SECTORS commits a full 512-byte sector back to the supplied image.
+    ata.write_port(0x1F2, 8, 1);
+    ata.write_port(0x1F3, 8, 2); // LBA 2
+    ata.write_port(0x1F4, 8, 0);
+    ata.write_port(0x1F5, 8, 0);
+    ata.write_port(0x1F7, 8, 0x30);
+    CHECK((ata.read_port(0x1F7, 8) & 0x08u) != 0);
+    for (std::uint32_t i = 0; i < 256; ++i)
+        ata.write_port(0x1F0, 16, 0xA000u + i);
+    CHECK(ata.image()[2u * AtaPioDevice::sector_bytes] == 0x00);
+    CHECK(ata.image()[2u * AtaPioDevice::sector_bytes + 1u] == 0xA0);
+    CHECK(ata.image()[3u * AtaPioDevice::sector_bytes - 2u] == 0xFF);
+    CHECK(ata.image()[3u * AtaPioDevice::sector_bytes - 1u] == 0xA0);
+    CHECK((ata.read_port(0x1F7, 8) & 0x08u) == 0);
+
+    // An out-of-range LBA raises IDNF/ERR without exposing a data buffer.
+    ata.write_port(0x1F2, 8, 1);
+    ata.write_port(0x1F3, 8, 16);
+    ata.write_port(0x1F7, 8, 0x20);
+    CHECK((ata.read_port(0x1F7, 8) & 0x01u) != 0);
+    CHECK(ata.read_port(0x1F1, 8) == 0x10);
+
+    // Software reset is asserted and then cleared through the control port.
+    ata.write_port(0x3F6, 8, 0x04);
+    CHECK(ata.status() == 0x80);
+    ata.write_port(0x3F6, 8, 0x00);
+    CHECK(ata.status() == 0x50);
+    CHECK(ata.error() == 0);
+
+    // The CPU can issue ATA task-file commands through its port-I/O callbacks.
+    Cpu bus_cpu(1024u * 1024u);
+    AtaPioDevice attached_ata(std::vector<std::uint8_t>(AtaPioDevice::sector_bytes, 0));
+    attached_ata.connect(bus_cpu);
+    constexpr std::array<std::uint8_t, 23> ata_bus_program{
+        0xBA, 0xF6, 0x01, // MOV DX,1F6h
+        0xB0, 0xE0,       // MOV AL,E0h
+        0xEE,             // OUT DX,AL
+        0xBA, 0xF2, 0x01, // MOV DX,1F2h
+        0xB0, 0x01,       // MOV AL,1
+        0xEE,             // OUT DX,AL
+        0xBA, 0xF7, 0x01, // MOV DX,1F7h
+        0xB0, 0xEC,       // MOV AL,ECh
+        0xEE,             // OUT DX,AL
+        0xBA, 0xF0, 0x01, // MOV DX,1F0h
+        0xED,             // IN AX,DX
+        0xF4              // HLT
+    };
+    bus_cpu.load(ata_bus_program, 0x7C00);
+    bus_cpu.registers().cs = 0;
+    bus_cpu.registers().eip = 0x7C00;
+    bus_cpu.run(32);
+    CHECK((bus_cpu.registers().eax & 0xFFFFu) == 0x0040);
+    CHECK(bus_cpu.halted());
 
     // The RAM backing store reaches beyond the original 1 MiB limit.
     cpu.write32(2u * 1024u * 1024u, 0xDEADBEEFu);
