@@ -70,7 +70,7 @@ int main() {
     video_disk[510] = 0x55; video_disk[511] = 0xAA;
     Pc video_pc(std::move(video_disk), 2u * 1024u * 1024u);
     video_pc.boot();
-    video_pc.run(16);
+    (void)video_pc.run(16);
     CHECK(video_pc.cpu().halted());
     CHECK(video_pc.cpu().read8(0xB8000) == static_cast<std::uint8_t>('B'));
     CHECK(video_pc.text_screen().find('B') != std::string::npos);
@@ -93,7 +93,7 @@ int main() {
     bios_disk[510] = 0x55; bios_disk[511] = 0xAA;
     Pc bios_disk_pc(std::move(bios_disk), 2u * 1024u * 1024u);
     bios_disk_pc.boot();
-    bios_disk_pc.run(32);
+    (void)bios_disk_pc.run(32);
     CHECK(bios_disk_pc.cpu().halted());
     CHECK(bios_disk_pc.cpu().last_error().empty());
     CHECK((bios_disk_pc.cpu().registers().eflags & xprevival::Cpu::Carry) == 0);
@@ -118,7 +118,7 @@ int main() {
     e820_disk[510] = 0x55; e820_disk[511] = 0xAA;
     Pc e820_pc(std::move(e820_disk), 4u * 1024u * 1024u);
     e820_pc.boot();
-    e820_pc.run(32);
+    (void)e820_pc.run(32);
     CHECK(e820_pc.cpu().halted());
     CHECK(e820_pc.cpu().last_error().empty());
     CHECK(e820_pc.cpu().registers().eax == 0x534D4150u);

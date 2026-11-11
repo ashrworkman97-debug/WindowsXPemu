@@ -183,8 +183,8 @@ bool Pc::handle_bios_interrupt(Cpu& cpu, std::uint8_t vector) {
 
             case 0x02: { // READ CHS SECTORS
                 const auto count = static_cast<std::uint16_t>(get_al());
-                const auto cylinder_low = static_cast<std::uint32_t>(registers.ecx & 0xFFu);
-                const auto sector_cylinder = static_cast<std::uint32_t>((registers.ecx >> 8) & 0xFFu);
+                const auto cylinder_low = static_cast<std::uint32_t>((registers.ecx >> 8) & 0xFFu);
+                const auto sector_cylinder = static_cast<std::uint32_t>(registers.ecx & 0xFFu);
                 const auto cylinder = cylinder_low | ((sector_cylinder & 0xC0u) << 2);
                 const auto sector = sector_cylinder & 0x3Fu;
                 const auto head = static_cast<std::uint32_t>((registers.edx >> 8) & 0xFFu);
@@ -237,7 +237,7 @@ bool Pc::handle_bios_interrupt(Cpu& cpu, std::uint8_t vector) {
                 const auto max_cylinder = std::min<std::uint32_t>((sectors_on_disk - 1u) / (16u * 63u), 1023u);
                 const auto ch = max_cylinder & 0xFFu;
                 const auto cl = 63u | ((max_cylinder >> 2) & 0xC0u);
-                registers.ecx = (registers.ecx & 0xFFFF0000u) | ch | (cl << 8);
+                registers.ecx = (registers.ecx & 0xFFFF0000u) | (ch << 8) | cl;
                 registers.edx = (registers.edx & 0xFFFF0000u) | (15u << 8) | 1u;
                 registers.ebx = (registers.ebx & 0xFFFF0000u) | 0x0004u;
                 bios_success(1);
