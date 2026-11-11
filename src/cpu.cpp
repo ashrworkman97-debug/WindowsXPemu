@@ -27,6 +27,7 @@ void Cpu::reset() {
     segments_[3] = {}; segments_[4] = {}; segments_[5] = {};
     gdtr_base_ = 0;
     gdtr_limit_ = 0;
+    last_page_fault_error_ = 0;
     halted_ = false;
     last_error_.clear();
     set_reset_state();
@@ -108,12 +109,12 @@ bool Cpu::load_segment(SegmentIndex segment, std::uint16_t selector) {
         return false;
     }
     const auto address = gdtr_base_ + descriptor_offset;
-    const auto limit_low = read16(address);
-    const auto base_low = read16(address + 2);
-    const auto base_mid = read8(address + 4);
-    const auto access = read8(address + 5);
-    const auto flags_limit = read8(address + 6);
-    const auto base_high = read8(address + 7);
+    const auto limit_low = read_linear16(address);
+    const auto base_low = read_linear16(address + 2);
+    const auto base_mid = read_linear8(address + 4);
+    const auto access = read_linear8(address + 5);
+    const auto flags_limit = read_linear8(address + 6);
+    const auto base_high = read_linear8(address + 7);
 
     if ((access & 0x80u) == 0 || (access & 0x10u) == 0) {
         last_error_ = "GDT descriptor is not a present code/data segment";
@@ -175,10 +176,95 @@ void Cpu::write32(std::uint32_t address, std::uint32_t value) {
     write16(address + 2, static_cast<std::uint16_t>(value >> 16));
 }
 
+[[noreturn]] void Cpu::record_page_fault(std::uint32_t linear, bool write, bool present, bool reserved) {
+    regs_.cr2 = linear;
+    last_page_fault_error_ = (present ? 1u : 0u) | (write ? 2u : 0u) | (reserved ? 8u : 0u);
+    last_error_ = "page fault at linear address " + std::to_string(linear) +
+                  " (error code " + std::to_string(last_page_fault_error_) + ")";
+    halted_ = true;
+    throw PageFault{};
+}
+
+std::uint32_t Cpu::translate_linear(std::uint32_t linear, bool write) {
+    constexpr std::uint32_t PagePresent = 1u << 0;
+    constexpr std::uint32_t PageWritable = 1u << 1;
+    constexpr std::uint32_t PageAccessed = 1u << 5;
+    constexpr std::uint32_t PageDirty = 1u << 6;
+    constexpr std::uint32_t PageSize = 1u << 7;
+    constexpr std::uint32_t PageWriteProtect = 1u << 16;
+
+    if ((regs_.cr0 & 0x80000000u) == 0) return linear;
+    if ((regs_.cr0 & 1u) == 0) {
+        last_error_ = "CR0.PG is set while CR0.PE is clear";
+        halted_ = true;
+        throw PageFault{};
+    }
+
+    // 386 two-level paging: 10-bit directory, 10-bit table, 12-bit offset.
+    // Page-table walks use physical RAM; guest fetches and data use linear addresses.
+    const auto directory_address = (regs_.cr3 & 0xFFFFF000u) + ((linear >> 22) & 0x3FFu) * 4u;
+    if (static_cast<std::uint64_t>(directory_address) + 4u > memory_.size())
+        record_page_fault(linear, write, false);
+    auto directory_entry = read32(directory_address);
+    if ((directory_entry & PagePresent) == 0) record_page_fault(linear, write, false);
+    if ((directory_entry & PageSize) != 0) record_page_fault(linear, write, true, true);
+
+    // Set the PDE accessed bit even when the following PTE lookup faults.
+    if ((directory_entry & PageAccessed) == 0) {
+        directory_entry |= PageAccessed;
+        write32(directory_address, directory_entry);
+    }
+
+    const auto table_address = (directory_entry & 0xFFFFF000u) + ((linear >> 12) & 0x3FFu) * 4u;
+    if (static_cast<std::uint64_t>(table_address) + 4u > memory_.size())
+        record_page_fault(linear, write, false);
+    auto table_entry = read32(table_address);
+    if ((table_entry & PagePresent) == 0) record_page_fault(linear, write, false);
+
+    // The current core models supervisor/CPL 0. CR0.WP makes supervisor
+    // writes honor read-only entries; user/supervisor privilege checks come later.
+    const bool writable = (directory_entry & PageWritable) != 0 &&
+                          (table_entry & PageWritable) != 0;
+    if (write && !writable && (regs_.cr0 & PageWriteProtect) != 0)
+        record_page_fault(linear, true, true);
+
+    table_entry |= PageAccessed;
+    if (write) table_entry |= PageDirty;
+    write32(table_address, table_entry);
+
+    const auto physical_address = (table_entry & 0xFFFFF000u) | (linear & 0xFFFu);
+    if (physical_address >= memory_.size())
+        throw std::out_of_range("translated physical address is outside emulated RAM");
+    return physical_address;
+}
+
+std::uint8_t Cpu::read_linear8(std::uint32_t address) {
+    return read8(translate_linear(address, false));
+}
+std::uint16_t Cpu::read_linear16(std::uint32_t address) {
+    return static_cast<std::uint16_t>(read_linear8(address) |
+        (static_cast<std::uint16_t>(read_linear8(address + 1u)) << 8));
+}
+std::uint32_t Cpu::read_linear32(std::uint32_t address) {
+    return static_cast<std::uint32_t>(read_linear16(address)) |
+        (static_cast<std::uint32_t>(read_linear16(address + 2u)) << 16);
+}
+void Cpu::write_linear8(std::uint32_t address, std::uint8_t value) {
+    write8(translate_linear(address, true), value);
+}
+void Cpu::write_linear16(std::uint32_t address, std::uint16_t value) {
+    write_linear8(address, static_cast<std::uint8_t>(value & 0xFFu));
+    write_linear8(address + 1u, static_cast<std::uint8_t>(value >> 8));
+}
+void Cpu::write_linear32(std::uint32_t address, std::uint32_t value) {
+    write_linear16(address, static_cast<std::uint16_t>(value & 0xFFFFu));
+    write_linear16(address + 2u, static_cast<std::uint16_t>(value >> 16));
+}
+
 std::uint8_t Cpu::fetch8() {
     const bool code32 = segments_[static_cast<std::size_t>(SegmentIndex::CS)].default32;
     const auto offset = code32 ? regs_.eip : (regs_.eip & 0xFFFFu);
-    const auto value = read8(physical(SegmentIndex::CS, offset));
+    const auto value = read_linear8(physical(SegmentIndex::CS, offset));
     if (code32) ++regs_.eip;
     else regs_.eip = (regs_.eip & 0xFFFF0000u) | ((regs_.eip + 1u) & 0xFFFFu);
     return value;
@@ -297,21 +383,21 @@ bool Cpu::decode_modrm(Operand& rm, std::uint8_t& reg, bool address32,
     return true;
 }
 
-std::uint32_t Cpu::read_operand(const Operand& operand, unsigned width) const {
-    if (width == 8) return operand.is_register ? read_byte_register(operand.reg) : read8(operand.address);
-    if (width == 16) return operand.is_register ? read_general(operand.reg, false) : read16(operand.address);
-    return operand.is_register ? read_general(operand.reg, true) : read32(operand.address);
+std::uint32_t Cpu::read_operand(const Operand& operand, unsigned width) {
+    if (width == 8) return operand.is_register ? read_byte_register(operand.reg) : read_linear8(operand.address);
+    if (width == 16) return operand.is_register ? read_general(operand.reg, false) : read_linear16(operand.address);
+    return operand.is_register ? read_general(operand.reg, true) : read_linear32(operand.address);
 }
 void Cpu::write_operand(const Operand& operand, unsigned width, std::uint32_t value) {
     if (width == 8) {
         if (operand.is_register) write_byte_register(operand.reg, static_cast<std::uint8_t>(value));
-        else write8(operand.address, static_cast<std::uint8_t>(value));
+        else write_linear8(operand.address, static_cast<std::uint8_t>(value));
     } else if (width == 16) {
         if (operand.is_register) write_general(operand.reg, false, value);
-        else write16(operand.address, static_cast<std::uint16_t>(value));
+        else write_linear16(operand.address, static_cast<std::uint16_t>(value));
     } else {
         if (operand.is_register) write_general(operand.reg, true, value);
-        else write32(operand.address, value);
+        else write_linear32(operand.address, value);
     }
 }
 
@@ -367,14 +453,14 @@ void Cpu::push(std::uint32_t value, bool operand32) {
     if (stack32) regs_.esp = pointer;
     else regs_.esp = (regs_.esp & 0xFFFF0000u) | (pointer & 0xFFFFu);
     const auto address = physical(SegmentIndex::SS, pointer);
-    if (operand32) write32(address, value);
-    else write16(address, static_cast<std::uint16_t>(value));
+    if (operand32) write_linear32(address, value);
+    else write_linear16(address, static_cast<std::uint16_t>(value));
 }
 std::uint32_t Cpu::pop(bool operand32) {
     const bool stack32 = segments_[static_cast<std::size_t>(SegmentIndex::SS)].default32;
     const std::uint32_t pointer = stack32 ? regs_.esp : (regs_.esp & 0xFFFFu);
     const auto address = physical(SegmentIndex::SS, pointer);
-    const auto value = operand32 ? read32(address) : read16(address);
+    const auto value = operand32 ? read_linear32(address) : read_linear16(address);
     const auto next = pointer + (operand32 ? 4u : 2u);
     if (stack32) regs_.esp = next;
     else regs_.esp = (regs_.esp & 0xFFFF0000u) | (next & 0xFFFFu);
@@ -383,6 +469,7 @@ std::uint32_t Cpu::pop(bool operand32) {
 
 void Cpu::step() {
     if (halted_) return;
+    try {
     const bool default32 = segments_[static_cast<std::size_t>(SegmentIndex::CS)].default32;
     bool operand32 = default32, address32 = default32, has_segment_override = false;
     SegmentIndex segment_override = SegmentIndex::DS;
@@ -454,7 +541,14 @@ void Cpu::step() {
             } else {
                 const auto value = read_general(general, true);
                 switch (control) {
-                    case 0: regs_.cr0 = value; break;
+                    case 0:
+                        if ((value & 0x80000000u) != 0 && (value & 1u) == 0) {
+                            last_error_ = "CR0.PG cannot be enabled while CR0.PE is clear";
+                            halted_ = true;
+                            return;
+                        }
+                        regs_.cr0 = value;
+                        break;
                     case 2: regs_.cr2 = value; break;
                     case 3: regs_.cr3 = value; break;
                     case 4: regs_.cr4 = value; break;
@@ -472,10 +566,10 @@ void Cpu::step() {
                 halted_ = true;
                 return;
             }
-            gdtr_limit_ = read16(rm.address);
-            if (operand32) gdtr_base_ = read32(rm.address + 2);
-            else gdtr_base_ = static_cast<std::uint32_t>(read8(rm.address + 2)) |
-                              (static_cast<std::uint32_t>(read16(rm.address + 3)) << 8);
+            gdtr_limit_ = read_linear16(rm.address);
+            if (operand32) gdtr_base_ = read_linear32(rm.address + 2);
+            else gdtr_base_ = static_cast<std::uint32_t>(read_linear8(rm.address + 2)) |
+                              (static_cast<std::uint32_t>(read_linear16(rm.address + 3)) << 8);
             return;
         }
 
@@ -662,12 +756,12 @@ void Cpu::step() {
         const bool load = (opcode & 2u) == 0;
         const unsigned width = byte_width ? 8u : (operand32 ? 32u : 16u);
         Operand accumulator{true, 0, 0};
-        if (load) write_operand(accumulator, width, width == 8 ? read8(address) : (width == 16 ? read16(address) : read32(address)));
+        if (load) write_operand(accumulator, width, width == 8 ? read_linear8(address) : (width == 16 ? read_linear16(address) : read_linear32(address)));
         else {
             const auto value = read_operand(accumulator, width);
-            if (width == 8) write8(address, static_cast<std::uint8_t>(value));
-            else if (width == 16) write16(address, static_cast<std::uint16_t>(value));
-            else write32(address, value);
+            if (width == 8) write_linear8(address, static_cast<std::uint8_t>(value));
+            else if (width == 16) write_linear16(address, static_cast<std::uint16_t>(value));
+            else write_linear32(address, value);
         }
         return;
     }
@@ -678,6 +772,9 @@ void Cpu::step() {
     last_error_ += digits[(opcode >> 4) & 0xF];
     last_error_ += digits[opcode & 0xF];
     halted_ = true;
+    } catch (const PageFault&) {
+        return;
+    }
 }
 
 void Cpu::run(std::size_t instruction_limit) {
