@@ -42,10 +42,11 @@ RAM can be selected from 1 to 2048 MiB. The default is 128 MiB. The current comm
 - Initial 386 4 KiB paging: CR3 page-directory lookup, 10/10/12 address translation, PDE/PTE present and writable checks, CR0.WP supervisor write protection, CR2 page-fault address reporting, page-fault error-code recording, and page-table accessed/dirty bits. Tests exercise a mapped non-identity page and a missing-page fault.
 - Initial x86 string instruction support: MOVS, CMPS, STOS, LODS, and SCAS byte/word/dword forms; REP/REPE/REPNE counts, SI/DI direction handling, and DF-controlled forward/backward traversal.
 - A deterministic virtual Intel Pentium III CPUID identity, a deterministic instruction-count RDTSC counter, basic CLI/STI/CLD/STD flag controls, and byte/word/dword IN/OUT instructions connected to a host-provided port-I/O callback bus.
+- An original primary-master ATA PIO device attached to the CPU's port callbacks. It implements IDENTIFY DEVICE, 28-bit LBA and basic CHS addressing, READ SECTORS, WRITE SECTORS, FLUSH CACHE, task-file status/error registers, and software reset. Disk contents are held in a caller-supplied raw image buffer.
 
 ## Major missing pieces
 
-This is not a complete 386/Pentium-class implementation. Privilege-level enforcement, full segmentation faults and limit enforcement, LDT, TSS/task switching, IDT and interrupt/exception delivery (page faults are recorded and halt the prototype rather than being dispatched through the IDT), PSE/4 MiB pages, PAE, a TLB, A20 behavior, firmware/BIOS services, a concrete PC I/O-device bus, PCI, PIT/PIC, IDE/ATAPI, VGA, keyboard, mouse, and CD-ROM boot are not implemented. The CPU I/O callbacks are only the attachment point; no chipset or disk has been connected yet. Windows XP cannot be installed or run yet.
+This is not a complete 386/Pentium-class PC. Privilege-level enforcement, full segmentation faults and limit enforcement, LDT, TSS/task switching, IDT and interrupt/exception delivery (page faults are recorded and halt the prototype rather than being dispatched through the IDT), PSE/4 MiB pages, PAE, a TLB, A20 behavior, firmware/BIOS services, PCI, PIT/PIC, IRQ routing, secondary ATA channels, slave devices, ATAPI/CD-ROM, DMA, VGA, keyboard, mouse, and a bootable machine configuration are not implemented. The primary ATA device is a directly attached PIO component; the CLI does not yet load a user disk image or boot from it. Windows XP cannot be installed or run yet.
 
 ## Project direction
 
