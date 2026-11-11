@@ -7,6 +7,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 add_library(xprevival_core
     src/cpu.cpp
+    src/ata_pio.cpp
 )
 target_include_directories(xprevival_core PUBLIC include)
 
