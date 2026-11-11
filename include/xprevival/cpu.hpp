@@ -45,6 +45,7 @@ public:
     void write32(std::uint32_t address, std::uint32_t value);
     [[nodiscard]] bool halted() const noexcept { return halted_; }
     [[nodiscard]] const std::string& last_error() const noexcept { return last_error_; }
+    [[nodiscard]] std::uint32_t last_page_fault_error_code() const noexcept { return last_page_fault_error_; }
 
 private:
     enum class SegmentIndex : std::uint8_t { ES, CS, SS, DS, FS, GS };
@@ -62,7 +63,17 @@ private:
         std::uint32_t address{};
     };
 
+    struct PageFault {};
+
     [[nodiscard]] std::uint32_t physical(SegmentIndex segment, std::uint32_t offset) const noexcept;
+    [[nodiscard]] std::uint32_t translate_linear(std::uint32_t linear, bool write);
+    [[noreturn]] void record_page_fault(std::uint32_t linear, bool write, bool present, bool reserved = false);
+    [[nodiscard]] std::uint8_t read_linear8(std::uint32_t address);
+    [[nodiscard]] std::uint16_t read_linear16(std::uint32_t address);
+    [[nodiscard]] std::uint32_t read_linear32(std::uint32_t address);
+    void write_linear8(std::uint32_t address, std::uint8_t value);
+    void write_linear16(std::uint32_t address, std::uint16_t value);
+    void write_linear32(std::uint32_t address, std::uint32_t value);
     [[nodiscard]] bool load_segment(SegmentIndex segment, std::uint16_t selector);
     [[nodiscard]] std::uint8_t fetch8();
     [[nodiscard]] std::uint16_t fetch16();
@@ -73,7 +84,7 @@ private:
     void write_byte_register(std::uint8_t index, std::uint8_t value) noexcept;
     [[nodiscard]] bool decode_modrm(Operand& rm, std::uint8_t& reg, bool address32,
                                     bool has_segment_override, SegmentIndex segment_override);
-    [[nodiscard]] std::uint32_t read_operand(const Operand& operand, unsigned width) const;
+    [[nodiscard]] std::uint32_t read_operand(const Operand& operand, unsigned width);
     void write_operand(const Operand& operand, unsigned width, std::uint32_t value);
     [[nodiscard]] std::uint32_t add(std::uint32_t lhs, std::uint32_t rhs, unsigned width) noexcept;
     [[nodiscard]] std::uint32_t subtract(std::uint32_t lhs, std::uint32_t rhs, unsigned width) noexcept;
@@ -87,6 +98,7 @@ private:
     SegmentCache segments_[6]{};
     std::uint32_t gdtr_base_{};
     std::uint16_t gdtr_limit_{};
+    std::uint32_t last_page_fault_error_{};
     Registers regs_{};
     bool halted_{false};
     std::string last_error_{};
