@@ -61,6 +61,7 @@ void check(bool condition, const char* expression, int line) {
 }
 
 int main() {
+    using xprevival::AtaPioDevice;
     using xprevival::Cpu;
     Cpu cpu(4u * 1024u * 1024u);
     CHECK(cpu.ram_size() == 4u * 1024u * 1024u);
