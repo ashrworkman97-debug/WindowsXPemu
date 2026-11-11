@@ -426,6 +426,45 @@ int main() {
     CHECK(cpu.halted());
 
 
+
+    // Real-mode INT pushes an architectural frame; IRET restores CS:IP and FLAGS.
+    cpu.reset();
+    constexpr std::array<std::uint8_t, 3> int_program{0xCD, 0x10, 0xF4};
+    constexpr std::array<std::uint8_t, 4> int_handler{
+        0xB8, 0x34, 0x12, // MOV AX,1234h
+        0xCF              // IRET
+    };
+    cpu.write16(0x10u * 4u, 0x7D00);
+    cpu.write16(0x10u * 4u + 2u, 0x0000);
+    cpu.load(int_program, 0x7C00);
+    cpu.load(int_handler, 0x7D00);
+    regs.cs = 0; regs.ss = 0; regs.esp = 0x9000; regs.eip = 0x7C00;
+    regs.eflags = 0x00000302u; // Reserved bit, IF, and TF.
+    cpu.run(16);
+    CHECK((cpu.registers().eax & 0xFFFFu) == 0x1234);
+    CHECK(cpu.registers().cs == 0);
+    CHECK(cpu.registers().eip == 0x7C03);
+    CHECK(cpu.registers().esp == 0x9000);
+    CHECK((cpu.registers().eflags & (Cpu::Interrupt | Cpu::Trap)) ==
+          (Cpu::Interrupt | Cpu::Trap));
+    CHECK(cpu.halted());
+
+    // PUSHF / POPF round-trip IF after CLI clears it.
+    cpu.reset();
+    constexpr std::array<std::uint8_t, 4> pushf_popf_program{
+        0x9C, // PUSHF
+        0xFA, // CLI
+        0x9D, // POPF
+        0xF4  // HLT
+    };
+    cpu.load(pushf_popf_program, 0x7C00);
+    regs.cs = 0; regs.ss = 0; regs.esp = 0x9000; regs.eip = 0x7C00;
+    regs.eflags = 0x00000202u;
+    cpu.run(8);
+    CHECK((cpu.registers().eflags & Cpu::Interrupt) != 0);
+    CHECK(cpu.registers().esp == 0x9000);
+    CHECK(cpu.halted());
+
     // Primary-master ATA IDENTIFY DEVICE, PIO read/write, and error reporting.
     std::vector<std::uint8_t> disk_image(4u * AtaPioDevice::sector_bytes, 0);
     for (std::size_t i = 0; i < AtaPioDevice::sector_bytes; ++i)

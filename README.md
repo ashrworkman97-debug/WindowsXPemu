@@ -43,10 +43,11 @@ RAM can be selected from 1 to 2048 MiB. The default is 128 MiB. The current comm
 - Initial x86 string instruction support: MOVS, CMPS, STOS, LODS, and SCAS byte/word/dword forms; REP/REPE/REPNE counts, SI/DI direction handling, and DF-controlled forward/backward traversal.
 - A deterministic virtual Intel Pentium III CPUID identity, a deterministic instruction-count RDTSC counter, basic CLI/STI/CLD/STD flag controls, and byte/word/dword IN/OUT instructions connected to a host-provided port-I/O callback bus.
 - An original primary-master ATA PIO device attached to the CPU's port callbacks. It implements IDENTIFY DEVICE, 28-bit LBA and basic CHS addressing, READ SECTORS, WRITE SECTORS, FLUSH CACHE, task-file status/error registers, and software reset. Disk contents are held in a caller-supplied raw image buffer.
+- Real-mode software interrupt delivery: `INT imm8`, `INT3`, conditional `INTO`, an IVT lookup, FLAGS/CS/IP stack frames, and `IRET`. `PUSHF`/`POPF` are also supported so BIOS-style handlers can preserve machine state.
 
 ## Major missing pieces
 
-This is not a complete 386/Pentium-class PC. Privilege-level enforcement, full segmentation faults and limit enforcement, LDT, TSS/task switching, IDT and interrupt/exception delivery (page faults are recorded and halt the prototype rather than being dispatched through the IDT), PSE/4 MiB pages, PAE, a TLB, A20 behavior, firmware/BIOS services, PCI, PIT/PIC, IRQ routing, secondary ATA channels, slave devices, ATAPI/CD-ROM, DMA, VGA, keyboard, mouse, and a bootable machine configuration are not implemented. The primary ATA device is a directly attached PIO component; the CLI does not yet load a user disk image or boot from it. Windows XP cannot be installed or run yet.
+This is not a complete 386/Pentium-class PC. Protected-mode IDT gates, privilege checks, hardware IRQ delivery, exceptions other than recorded-and-halted page faults, full segmentation faults and limit enforcement, LDT, TSS/task switching, PSE/4 MiB pages, PAE, a TLB, A20 behavior, firmware/BIOS services, PCI, PIT/PIC, IRQ routing, secondary ATA channels, slave devices, ATAPI/CD-ROM, DMA, VGA, keyboard, mouse, and a bootable machine configuration are not implemented. Real-mode software interrupts are a CPU foundation only; no BIOS handlers have been built yet. The primary ATA device is a directly attached PIO component; the CLI does not yet load a user disk image or boot from it. Windows XP cannot be installed or run yet.
 
 ## Project direction
 

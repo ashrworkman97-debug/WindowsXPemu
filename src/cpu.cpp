@@ -539,6 +539,53 @@ void Cpu::step() {
     if (opcode == 0xFB) { regs_.eflags |= Interrupt; return; }  // STI
     if (opcode == 0xFC) { regs_.eflags &= ~Direction; return; } // CLD
     if (opcode == 0xFD) { regs_.eflags |= Direction; return; }  // STD
+    if (opcode == 0x9C) { push(regs_.eflags, operand32); return; } // PUSHF/PUSHFD
+    if (opcode == 0x9D) { // POPF/POPFD
+        const auto value = pop(operand32);
+        if (operand32) regs_.eflags = value | 0x00000002u;
+        else regs_.eflags = (regs_.eflags & 0xFFFF0000u) | (value & 0xFFFFu) | 0x00000002u;
+        return;
+    }
+    if (opcode == 0xCC || opcode == 0xCD || opcode == 0xCE) {
+        std::uint8_t vector = 3;
+        if (opcode == 0xCD) vector = fetch8();
+        else if (opcode == 0xCE) {
+            if ((regs_.eflags & Overflow) == 0) return;
+            vector = 4;
+        }
+        if ((regs_.cr0 & 1u) != 0) {
+            last_error_ = "protected-mode interrupt gates and privilege checks are not implemented";
+            halted_ = true;
+            return;
+        }
+        // Real-mode interrupt frame: FLAGS, CS, then the return IP at the top.
+        push(regs_.eflags, operand32);
+        push(regs_.cs, operand32);
+        push(regs_.eip, operand32);
+        regs_.eflags &= ~(Interrupt | Trap);
+        const auto vector_address = static_cast<std::uint32_t>(vector) * 4u;
+        const auto target_ip = read_linear16(vector_address);
+        const auto target_cs = read_linear16(vector_address + 2u);
+        if (!load_segment(SegmentIndex::CS, target_cs)) return;
+        regs_.eip = target_ip;
+        return;
+    }
+    if (opcode == 0xCF) { // IRET/IRETD; real-mode frame only.
+        if ((regs_.cr0 & 1u) != 0) {
+            last_error_ = "protected-mode IRET is not implemented";
+            halted_ = true;
+            return;
+        }
+        const auto target_ip = pop(operand32);
+        const auto target_cs = static_cast<std::uint16_t>(pop(operand32) & 0xFFFFu);
+        const auto restored_flags = pop(operand32);
+        if (!load_segment(SegmentIndex::CS, target_cs)) return;
+        regs_.eip = operand32 ? target_ip : (target_ip & 0xFFFFu);
+        if (operand32) regs_.eflags = restored_flags | 0x00000002u;
+        else regs_.eflags = (regs_.eflags & 0xFFFF0000u) |
+                            (restored_flags & 0xFFFFu) | 0x00000002u;
+        return;
+    }
 
     if (opcode == 0x0F) {
         const auto second = fetch8();
