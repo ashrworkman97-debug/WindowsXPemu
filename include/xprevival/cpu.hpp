@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <span>
 #include <string>
 #include <vector>
@@ -10,6 +11,9 @@ namespace xprevival {
 
 class Cpu {
 public:
+    using IoReadCallback = std::function<std::uint32_t(std::uint16_t, unsigned)>;
+    using IoWriteCallback = std::function<void(std::uint16_t, unsigned, std::uint32_t)>;
+
     static constexpr std::size_t default_ram_size = 128u * 1024u * 1024u;
 
     enum Flag : std::uint32_t {
@@ -33,6 +37,7 @@ public:
     void set_reset_state();
     void step();
     void run(std::size_t instruction_limit);
+    void set_io_callbacks(IoReadCallback read_callback, IoWriteCallback write_callback);
 
     [[nodiscard]] std::size_t ram_size() const noexcept { return memory_.size(); }
     [[nodiscard]] Registers& registers() noexcept { return regs_; }
@@ -67,6 +72,8 @@ private:
 
     [[nodiscard]] std::uint32_t physical(SegmentIndex segment, std::uint32_t offset) const noexcept;
     [[nodiscard]] std::uint32_t translate_linear(std::uint32_t linear, bool write);
+    [[nodiscard]] std::uint32_t read_port(std::uint16_t port, unsigned width);
+    void write_port(std::uint16_t port, unsigned width, std::uint32_t value);
     [[noreturn]] void record_page_fault(std::uint32_t linear, bool write, bool present, bool reserved = false);
     [[nodiscard]] std::uint8_t read_linear8(std::uint32_t address);
     [[nodiscard]] std::uint16_t read_linear16(std::uint32_t address);
@@ -99,6 +106,9 @@ private:
     std::uint32_t gdtr_base_{};
     std::uint16_t gdtr_limit_{};
     std::uint32_t last_page_fault_error_{};
+    std::uint64_t tsc_{};
+    IoReadCallback io_read_callback_{};
+    IoWriteCallback io_write_callback_{};
     Registers regs_{};
     bool halted_{false};
     std::string last_error_{};
