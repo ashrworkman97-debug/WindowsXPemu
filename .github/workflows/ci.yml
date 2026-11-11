@@ -1,4 +1,4 @@
-name: Build and test
+name: Windows build and test
 
 on:
   push:
@@ -6,18 +6,36 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
 jobs:
-  build:
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
+  windows-x64:
+    name: Windows x64 (MSVC)
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Configure
-        run: cmake -S . -B build
-      - name: Build
+
+      - name: Configure with Visual Studio x64
+        run: cmake -S . -B build -A x64
+
+      - name: Build Release
         run: cmake --build build --config Release --parallel
-      - name: Test
+
+      - name: Run CPU tests
         run: ctest --test-dir build -C Release --output-on-failure
+
+      - name: Smoke-test command-line executable
+        shell: pwsh
+        run: |
+          & .\build\Release\xprevival.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Publish Windows x64 binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: XP-Revival-Windows-x64
+          path: |
+            build/Release/xprevival.exe
+            build/Release/cpu_tests.exe
+          if-no-files-found: error
