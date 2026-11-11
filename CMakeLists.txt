@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(XP_Revival VERSION 0.7.0 LANGUAGES CXX)
+project(XP_Revival VERSION 0.8.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -7,6 +7,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 add_library(xprevival_core
     src/cpu.cpp
+    src/ata_pio.cpp
 )
 target_include_directories(xprevival_core PUBLIC include)
 
