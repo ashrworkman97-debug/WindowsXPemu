@@ -4,10 +4,12 @@
 #include <cassert>
 #include <cstdint>
 #include <iostream>
+#include <stdexcept>
 
 int main() {
     using xprevival::Cpu;
-    Cpu cpu;
+    Cpu cpu(4u * 1024u * 1024u);
+    assert(cpu.ram_size() == 4u * 1024u * 1024u);
     assert(cpu.registers().cs == 0xF000);
     assert(cpu.registers().ip == 0xFFF0);
 
@@ -26,9 +28,19 @@ int main() {
     assert(cpu.halted());
     assert(cpu.last_error().empty());
 
-    Cpu memory_test;
-    memory_test.write16(0x100, 0xBEEF);
-    assert(memory_test.read16(0x100) == 0xBEEF);
+    // The RAM backing store reaches beyond the original 1 MiB limit.
+    cpu.write16(2u * 1024u * 1024u, 0xBEEF);
+    assert(cpu.read16(2u * 1024u * 1024u) == 0xBEEF);
+
+    bool rejected_small_ram = false;
+    try { Cpu too_small(512u * 1024u); }
+    catch (const std::invalid_argument&) { rejected_small_ram = true; }
+    assert(rejected_small_ram);
+
+    bool rejected_out_of_range = false;
+    try { cpu.read8(4u * 1024u * 1024u); }
+    catch (const std::out_of_range&) { rejected_out_of_range = true; }
+    assert(rejected_out_of_range);
 
     std::cout << "CPU core tests passed.\n";
     return 0;
