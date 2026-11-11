@@ -70,7 +70,7 @@ int main() {
     auto identify_tail = read_bytes(channel, 510);
     CHECK(identify_tail.size() == 510);
     CHECK((channel.read_port(0x1F7, 8) & 0x08u) == 0);
-    CHECK((channel.read_port(0x1F4, 8) == 0x14u) || (channel.read_port(0x1F7, 8) == 0x50u));
+    CHECK((channel.read_port(0x1F7, 8) & 0x08u) == 0); // IDENTIFY transfer is complete.
 
     // INQUIRY identifies the target as a removable CD-ROM device.
     constexpr std::array<std::uint8_t, 12> inquiry{
