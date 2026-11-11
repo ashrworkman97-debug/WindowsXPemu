@@ -29,9 +29,9 @@ int main(int argc, char** argv) {
     }
 
     if (!program_path) {
-        std::cout << "XP Revival CPU prototype 0.5.0\n"
+        std::cout << "XP Revival CPU prototype 0.6.0\n"
                   << "Usage: xprevival [--ram-mib N] <raw-x86-binary>\n"
-                  << "Default RAM: 128 MiB (386 registers; experimental protected mode; paging off).\n";
+                  << "Default RAM: 128 MiB (386 registers; protected mode; experimental 4 KiB paging).\n";
         return 0;
     }
 
