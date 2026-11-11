@@ -315,6 +315,62 @@ int main() {
     CHECK(cpu.halted());
 
 
+
+    // CPUID's feature mask advertises the implemented TSC and no unmodeled extensions.
+    cpu.reset();
+    constexpr std::array<std::uint8_t, 8> cpuid_features_program{
+        0xB8, 0x01, 0x00, 0x00, 0x00, // MOV EAX,1
+        0x0F, 0xA2,                   // CPUID
+        0xF4
+    };
+    cpu.load(cpuid_features_program, 0x7C00);
+    regs.cs = 0; regs.eip = 0x7C00;
+    cpu.run(8);
+    CHECK(cpu.registers().eax == 0x00000673u);
+    CHECK(cpu.registers().edx == (1u << 4)); // TSC only
+    CHECK(cpu.halted());
+
+    // REPE CMPSB stops at the first mismatch and leaves the mismatch flags.
+    cpu.reset();
+    constexpr std::array<std::uint8_t, 14> repe_cmpsb_program{
+        0xBE, 0x00, 0x03, // MOV SI,0300h
+        0xBF, 0x00, 0x04, // MOV DI,0400h
+        0xB9, 0x03, 0x00, // MOV CX,3
+        0xF3, 0xA6,       // REPE CMPSB
+        0xF4,             // HLT
+        0x90
+    };
+    cpu.write8(0x0300, 0x11); cpu.write8(0x0301, 0x22); cpu.write8(0x0302, 0x33);
+    cpu.write8(0x0400, 0x11); cpu.write8(0x0401, 0x99); cpu.write8(0x0402, 0x33);
+    cpu.load(repe_cmpsb_program, 0x7C00);
+    regs.cs = 0; regs.ds = 0; regs.es = 0; regs.eip = 0x7C00;
+    cpu.run(16);
+    CHECK((cpu.registers().ecx & 0xFFFFu) == 1);
+    CHECK((cpu.registers().esi & 0xFFFFu) == 0x0302);
+    CHECK((cpu.registers().edi & 0xFFFFu) == 0x0402);
+    CHECK((cpu.registers().eflags & Cpu::Zero) == 0);
+    CHECK(cpu.halted());
+
+    // REPE SCASB uses AL (not AX) while scanning ES:DI.
+    cpu.reset();
+    constexpr std::array<std::uint8_t, 12> repe_scasb_program{
+        0xB0, 0x5A,       // MOV AL,5Ah
+        0xBF, 0x00, 0x05, // MOV DI,0500h
+        0xB9, 0x02, 0x00, // MOV CX,2
+        0xF3, 0xAE,       // REPE SCASB
+        0xF4,
+        0x90
+    };
+    cpu.write8(0x0500, 0x5A); cpu.write8(0x0501, 0x6B);
+    cpu.load(repe_scasb_program, 0x7C00);
+    regs.cs = 0; regs.es = 0; regs.eip = 0x7C00;
+    cpu.run(16);
+    CHECK((cpu.registers().ecx & 0xFFFFu) == 0);
+    CHECK((cpu.registers().edi & 0xFFFFu) == 0x0502);
+    CHECK((cpu.registers().eax & 0xFFu) == 0x5A);
+    CHECK((cpu.registers().eflags & Cpu::Zero) == 0);
+    CHECK(cpu.halted());
+
     // RDTSC advances a deterministic virtual counter rather than wall-clock time.
     cpu.reset();
     constexpr std::array<std::uint8_t, 3> rdtsc_program{0x0F, 0x31, 0xF4};
