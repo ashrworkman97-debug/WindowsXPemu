@@ -314,6 +314,17 @@ int main() {
     CHECK(cpu.registers().ecx == 0x6C65746Eu);
     CHECK(cpu.halted());
 
+
+    // RDTSC advances a deterministic virtual counter rather than wall-clock time.
+    cpu.reset();
+    constexpr std::array<std::uint8_t, 3> rdtsc_program{0x0F, 0x31, 0xF4};
+    cpu.load(rdtsc_program, 0x7C00);
+    regs.cs = 0; regs.eip = 0x7C00;
+    cpu.run(8);
+    CHECK(cpu.registers().eax == 1);
+    CHECK(cpu.registers().edx == 0);
+    CHECK(cpu.halted());
+
     // Port I/O is delegated to the PC/device bus callbacks.
     cpu.reset();
     std::uint16_t observed_port = 0;
