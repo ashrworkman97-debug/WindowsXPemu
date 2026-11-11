@@ -24,6 +24,7 @@ public:
     // Load sector 0 at 0000:7C00 and establish the conventional BIOS handoff
     // register state. This is a direct boot-sector handoff, not a BIOS.
     void boot();
+    void boot_from_cdrom();
 
     // Execute up to instruction_limit guest instructions. REP strings are
     // handled by the CPU core as a single decoded instruction.

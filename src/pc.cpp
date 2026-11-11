@@ -59,6 +59,115 @@ void Pc::boot() {
     booted_ = true;
 }
 
+void Pc::boot_from_cdrom() {
+    if (booted_) throw std::logic_error("PC has already been booted");
+    const auto& image = atapi_.image();
+    constexpr std::size_t block_bytes = AtapiCdromDevice::sector_bytes;
+    constexpr std::size_t descriptor_start = 16;
+    constexpr std::size_t descriptor_limit = 64;
+    if (image.size() < (descriptor_start + 1u) * block_bytes)
+        throw std::runtime_error("CD image is too small to contain an ISO-9660 volume descriptor set");
+
+    const auto read_le16 = [&image](std::size_t offset) {
+        return static_cast<std::uint16_t>(image[offset] |
+               (static_cast<std::uint16_t>(image[offset + 1]) << 8));
+    };
+    const auto read_le32 = [&image](std::size_t offset) {
+        return static_cast<std::uint32_t>(image[offset]) |
+               (static_cast<std::uint32_t>(image[offset + 1]) << 8) |
+               (static_cast<std::uint32_t>(image[offset + 2]) << 16) |
+               (static_cast<std::uint32_t>(image[offset + 3]) << 24);
+    };
+
+    constexpr std::string_view iso_id = "CD001";
+    constexpr std::string_view boot_system_id = "EL TORITO SPECIFICATION";
+    const auto block_count = image.size() / block_bytes;
+    std::uint32_t catalog_lba = 0;
+    bool found_catalog = false;
+    const auto descriptor_end = std::min<std::size_t>(block_count, descriptor_limit);
+    for (std::size_t lba = descriptor_start; lba < descriptor_end; ++lba) {
+        const auto offset = lba * block_bytes;
+        if (!std::equal(iso_id.begin(), iso_id.end(), image.begin() + offset + 1) ||
+            image[offset + 6] != 1) {
+            throw std::runtime_error("invalid ISO-9660 volume descriptor in El Torito descriptor set");
+        }
+        const auto type = image[offset];
+        if (type == 255) break;
+        if (type == 0 &&
+            std::equal(boot_system_id.begin(), boot_system_id.end(), image.begin() + offset + 7)) {
+            catalog_lba = read_le32(offset + 71);
+            found_catalog = true;
+            break;
+        }
+    }
+    if (!found_catalog)
+        throw std::runtime_error("ISO image has no El Torito Boot Record Volume Descriptor");
+    if (catalog_lba >= block_count)
+        throw std::runtime_error("El Torito Boot Catalog points outside the CD image");
+
+    const auto catalog_offset = static_cast<std::size_t>(catalog_lba) * block_bytes;
+    const auto* catalog = image.data() + catalog_offset;
+    if (catalog[0] != 0x01 || catalog[1] != 0x00 ||
+        catalog[30] != 0x55 || catalog[31] != 0xAA)
+        throw std::runtime_error("El Torito validation entry is invalid or is not for x86");
+
+    std::uint32_t checksum = 0;
+    for (std::size_t i = 0; i < 32; i += 2) {
+        checksum += static_cast<std::uint16_t>(catalog[i] |
+                     (static_cast<std::uint16_t>(catalog[i + 1]) << 8));
+    }
+    if ((checksum & 0xFFFFu) != 0)
+        throw std::runtime_error("El Torito Boot Catalog checksum is invalid");
+
+    const auto* entry = catalog + 32;
+    if (entry[0] != 0x88)
+        throw std::runtime_error("El Torito default boot entry is not marked bootable");
+    const auto media_type = static_cast<std::uint8_t>(entry[1] & 0x0Fu);
+    if (media_type != 0)
+        throw std::runtime_error("El Torito floppy/hard-disk emulation modes are not implemented yet");
+
+    auto load_segment = static_cast<std::uint16_t>(entry[2] |
+                           (static_cast<std::uint16_t>(entry[3]) << 8));
+    if (load_segment == 0) load_segment = 0x07C0;
+    const auto sector_count = static_cast<std::uint16_t>(entry[6] |
+                              (static_cast<std::uint16_t>(entry[7]) << 8));
+    const auto load_rba = static_cast<std::uint32_t>(entry[8]) |
+                          (static_cast<std::uint32_t>(entry[9]) << 8) |
+                          (static_cast<std::uint32_t>(entry[10]) << 16) |
+                          (static_cast<std::uint32_t>(entry[11]) << 24);
+    if (sector_count == 0)
+        throw std::runtime_error("El Torito boot entry requests zero virtual sectors");
+
+    const std::uint64_t source_offset = static_cast<std::uint64_t>(load_rba) * block_bytes;
+    const std::uint64_t byte_count = static_cast<std::uint64_t>(sector_count) * 512u;
+    const std::uint64_t destination = static_cast<std::uint64_t>(load_segment) << 4;
+    if (source_offset > image.size() || byte_count > image.size() - source_offset)
+        throw std::runtime_error("El Torito boot image extends beyond the CD image");
+    if (destination > cpu_.ram_size() || byte_count > cpu_.ram_size() - destination)
+        throw std::runtime_error("El Torito boot image does not fit in emulated RAM");
+
+    cpu_.reset();
+    cpu_.load(std::span<const std::uint8_t>(
+                  image.data() + static_cast<std::size_t>(source_offset),
+                  static_cast<std::size_t>(byte_count)),
+              static_cast<std::uint32_t>(destination));
+
+    vga_cursor_ = 0;
+    video_mode_ = 3;
+    auto& registers = cpu_.registers();
+    registers.cs = load_segment;
+    registers.ds = 0;
+    registers.es = 0;
+    registers.ss = 0;
+    registers.fs = 0;
+    registers.gs = 0;
+    registers.eip = 0;
+    registers.esp = 0x7C00;
+    registers.edx = (registers.edx & 0xFFFFFF00u) | 0xE0u;
+    registers.eflags = 0x00000002u;
+    booted_ = true;
+}
+
 void Pc::set_interrupt_carry(Cpu& cpu, bool carry) const {
     const auto& registers = cpu.registers();
     const auto stack_offset = (registers.esp + 4u) & 0xFFFFu;
@@ -174,7 +283,89 @@ bool Pc::handle_bios_interrupt(Cpu& cpu, std::uint8_t vector) {
     }
 
     if (vector == 0x13) {
-        if ((registers.edx & 0xFFu) != 0x80u) {
+        const auto boot_drive = static_cast<std::uint8_t>(registers.edx & 0xFFu);
+        if (boot_drive == 0xE0u) {
+            switch (get_ah()) {
+                case 0x00: // RESET CD-ROM DEVICE
+                    bios_success();
+                    return true;
+
+                case 0x41: // CHECK EXTENDED DISK DRIVE SUPPORT
+                    if ((registers.ebx & 0xFFFFu) != 0x55AAu) {
+                        bios_failure(0x01);
+                        return true;
+                    }
+                    registers.ebx = (registers.ebx & 0xFFFF0000u) | 0xAA55u;
+                    registers.ecx = (registers.ecx & 0xFFFF0000u) | 0x0001u;
+                    bios_success();
+                    set_ah(0x30);
+                    return true;
+
+                case 0x42: { // EDD READ: CD logical blocks are 2048 bytes.
+                    const auto dap = (static_cast<std::uint32_t>(registers.ds) << 4) +
+                                     static_cast<std::uint32_t>(registers.esi & 0xFFFFu);
+                    if (dap > cpu.ram_size() || 16u > cpu.ram_size() - dap ||
+                        cpu.read8(dap) < 16u) {
+                        bios_failure(0x01);
+                        return true;
+                    }
+                    const auto count = cpu.read16(dap + 2u);
+                    const auto offset = cpu.read16(dap + 4u);
+                    const auto segment = cpu.read16(dap + 6u);
+                    const auto lba_low = cpu.read32(dap + 8u);
+                    const auto lba_high = cpu.read32(dap + 12u);
+                    const auto destination = (static_cast<std::uint32_t>(segment) << 4) + offset;
+                    const std::uint64_t bytes = static_cast<std::uint64_t>(count) * AtapiCdromDevice::sector_bytes;
+                    const auto total_blocks = atapi_.image().size() / AtapiCdromDevice::sector_bytes;
+                    if (count == 0 || lba_high != 0 || offset + bytes > 0x10000u ||
+                        destination > cpu.ram_size() || bytes > cpu.ram_size() - destination) {
+                        bios_failure(0x01);
+                        return true;
+                    }
+                    if (lba_low >= total_blocks || count > total_blocks - lba_low) {
+                        bios_failure(0x04);
+                        return true;
+                    }
+                    const auto source = static_cast<std::size_t>(lba_low) * AtapiCdromDevice::sector_bytes;
+                    const auto& cd = atapi_.image();
+                    for (std::size_t i = 0; i < static_cast<std::size_t>(bytes); ++i)
+                        cpu.write8(destination + static_cast<std::uint32_t>(i), cd[source + i]);
+                    bios_success();
+                    return true;
+                }
+
+                case 0x48: { // EXTENDED CD-ROM PARAMETERS
+                    const auto table = (static_cast<std::uint32_t>(registers.ds) << 4) +
+                                       static_cast<std::uint32_t>(registers.esi & 0xFFFFu);
+                    if (table > cpu.ram_size() || 0x1Eu > cpu.ram_size() - table ||
+                        cpu.read16(table) < 0x1Au) {
+                        bios_failure(0x01);
+                        return true;
+                    }
+                    const auto blocks = static_cast<std::uint32_t>(
+                        atapi_.image().size() / AtapiCdromDevice::sector_bytes);
+                    cpu.write16(table, 0x001Au);
+                    cpu.write16(table + 2u, 0x0002u);
+                    cpu.write32(table + 4u, 1u);
+                    cpu.write32(table + 8u, 1u);
+                    cpu.write32(table + 12u, 1u);
+                    cpu.write32(table + 16u, blocks);
+                    cpu.write32(table + 20u, 0u);
+                    cpu.write16(table + 24u, static_cast<std::uint16_t>(AtapiCdromDevice::sector_bytes));
+                    bios_success();
+                    return true;
+                }
+
+                default:
+                    bios_failure(0x01);
+                    return true;
+            }
+        }
+
+        if (boot_drive != 0x80u) {
+            bios_failure(0x01);
+            return true;
+        }
             bios_failure(0x01);
             return true;
         }
