@@ -4,7 +4,6 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
-#include <iterator>
 #include <string_view>
 #include <vector>
 
@@ -41,8 +40,18 @@ int main(int argc, char** argv) {
         std::cerr << "Could not open: " << program_path << '\n';
         return 1;
     }
-    std::vector<std::uint8_t> program(
-        std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>());
+
+    // Read byte-by-byte into an unsigned buffer. Besides avoiding the
+    // most-vexing-parse trap, this preserves all byte values on signed-char
+    // platforms.
+    std::vector<std::uint8_t> program;
+    for (char byte{}; input.get(byte);) {
+        program.push_back(static_cast<std::uint8_t>(static_cast<unsigned char>(byte)));
+    }
+    if (input.bad()) {
+        std::cerr << "Error while reading: " << program_path << '\n';
+        return 1;
+    }
 
     try {
         xprevival::Cpu cpu(ram_mib * 1024u * 1024u);
