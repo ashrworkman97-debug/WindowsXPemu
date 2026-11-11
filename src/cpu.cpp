@@ -870,11 +870,15 @@ void Cpu::step() {
                 else if (width == 16) write_linear16(address, static_cast<std::uint16_t>(value));
                 else write_linear32(address, value);
             };
+            const auto accumulator_value = [this, width]() {
+                return width == 8 ? static_cast<std::uint32_t>(read_byte_register(0))
+                                  : read_general(0, width == 32);
+            };
 
             if (opcode == 0xA4 || opcode == 0xA5) {
                 write_element(destination_address, read_element(source_address));
             } else if (opcode == 0xAA || opcode == 0xAB) {
-                write_element(destination_address, read_general(0, width == 32));
+                write_element(destination_address, accumulator_value());
             } else if (opcode == 0xAC || opcode == 0xAD) {
                 const auto value = read_element(source_address);
                 if (width == 8) write_byte_register(0, static_cast<std::uint8_t>(value));
@@ -882,7 +886,7 @@ void Cpu::step() {
             } else if (opcode == 0xA6 || opcode == 0xA7) {
                 (void)subtract(read_element(source_address), read_element(destination_address), width);
             } else {
-                (void)subtract(read_general(0, width == 32), read_element(destination_address), width);
+                (void)subtract(accumulator_value(), read_element(destination_address), width);
             }
 
             if (uses_source) store_index(regs_.esi, source_index + adjust);
