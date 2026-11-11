@@ -28,25 +28,27 @@ A from-scratch x86 PC emulator project. The goal is to boot a real, user-supplie
 
 The CPU-core prototype uses C++20 and CMake.
 
-```sh
+\`\`\`sh
 cmake -S . -B build
 cmake --build build --config Release
 ctest --test-dir build -C Release --output-on-failure
 ./build/xprevival --ram-mib 256 boot-sector.bin
-```
+\`\`\`
 
-On Windows, run xprevival.exe from the build directory. RAM can be selected from 1 to 2048 MiB; the default is 128 MiB.
+On Windows, run \`xprevival.exe\` from the build directory. RAM can be selected from 1 to 2048 MiB; the default is 128 MiB.
 
 ## Current prototype
 
 - Configurable RAM backing store (128 MiB default, 1–2048 MiB selectable).
 - 32-bit general-purpose register file (EAX–EDI), EIP, and EFLAGS.
-- 0x66 operand-size override while executing with a 16-bit real-mode code-segment default.
-- Initial 32-bit immediate MOV, register-direct MOV/ADD/SUB/XOR/CMP, INC/DEC, PUSH/POP, CALL/RET, and short conditional jumps.
-- 16-bit real-mode MOV/NOP/HLT subset retained.
-- Release-safe tests exercise the 16-bit and 32-bit-width instruction paths, flags, RAM above 1 MiB, and invalid memory ranges.
+- 0x66 operand-size override in the current 16-bit real-mode execution model.
+- Initial 8-, 16-, and 32-bit MOV operations, including register and memory operands.
+- 16-bit ModRM effective-address forms, signed 8-/16-bit displacements, BP-to-SS default segment behavior, and explicit segment overrides.
+- Initial ADD, OR, AND, SUB, XOR, CMP, INC, DEC, PUSH, POP, CALL, RET, and short conditional branches. ADC/SBB and many other x86 operations remain unsupported.
+- Moffs accumulator transfers and group-1 immediate arithmetic for the implemented operations.
+- Release-safe tests exercise real-mode instruction decoding, byte flags/branches, ModRM RAM access, segment selection, 32-bit data transfers, high RAM, and invalid memory ranges.
 
-**Important limitations:** This is not protected mode. Memory-form ModRM operands, 8-bit register operations, 32-bit addressing, A20 behavior, descriptor tables, control registers, paging, interrupts, BIOS, disk controllers, VGA, and ISO boot are not implemented. Widening the register file does not by itself make Windows XP bootable.
+**Important limitations:** This is not protected mode. 32-bit effective-address decoding, descriptor tables and hidden segment caches, control registers, A20 gate, paging, interrupts, BIOS, disk controllers, VGA, and ISO boot are not implemented. Windows XP is not yet bootable.
 
 ## Legal note
 
