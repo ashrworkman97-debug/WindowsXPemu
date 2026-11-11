@@ -7,6 +7,7 @@
 #include <iostream>
 #include <span>
 #include <stdexcept>
+#include <utility>
 #include <vector>
 
 namespace {
