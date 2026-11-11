@@ -48,7 +48,7 @@ void write_binary(const std::string& path, const std::vector<std::uint8_t>& byte
 
 void print_help() {
     std::cout
-        << "XP Revival PC emulator 0.9.0 (Windows x64)\n"
+        << "XP Revival PC emulator 0.9.1 (Windows x64)\n"
         << "Usage:\n"
         << "  xprevival.exe --demo [--ram-mib N] [--steps N]\n"
         << "  xprevival.exe --disk <raw-disk.img> [--ram-mib N] [--steps N] [--write-disk]\n"

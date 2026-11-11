@@ -39,7 +39,8 @@ int main() {
     CHECK(executed > 10);
     CHECK(pc.cpu().halted());
     CHECK(pc.cpu().last_error().empty());
-    CHECK(pc.cpu().read16(0x0600) == 0x0040); // ATA IDENTIFY word 0
+    CHECK(pc.cpu().read16(0x8000) == 0x00B8); // stage two was fetched from LBA 1
+    CHECK((pc.disk().status() & 0x08u) == 0); // ATA data request cleared after 256 words
     CHECK(pc.text_screen().find("XP REVIVAL - ATA BOOT OK") != std::string::npos);
 
     bool rejected_second_boot = false;

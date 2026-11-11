@@ -817,6 +817,62 @@ void Cpu::step() {
     }
 
 
+    // String port I/O. INS reads DX into ES:DI/EDI; OUTS sends DS:SI/ESI
+    // (or an explicitly overridden source segment) to DX. REP uses CX/ECX.
+    if (opcode >= 0x6C && opcode <= 0x6F) {
+        const input = opcode == 0x6C || opcode == 0x6D;
+        const byte_width = opcode == 0x6C || opcode == 0x6E;
+        const unsigned width = byte_width ? 8u : (operand32 ? 32u : 16u);
+        const std::uint32_t element_size = width / 8u;
+        const bool repeated = repeat_prefix != 0;
+        auto count = repeated ? (address32 ? regs_.ecx : (regs_.ecx & 0xFFFFu)) : 1u;
+        if (repeated && count == 0) return;
+
+        const auto adjust = (regs_.eflags & Direction) != 0
+            ? (0u - element_size) : element_size;
+        const auto port = static_cast<std::uint16_t>(regs_.edx);
+        constexpr std::uint32_t MaxStringIoIterationsPerStep = 65536u;
+        std::uint32_t iterations = 0;
+
+        while (count != 0 && iterations < MaxStringIoIterationsPerStep) {
+            if (input) {
+                const auto index = address32 ? regs_.edi : (regs_.edi & 0xFFFFu);
+                const auto address = physical(SegmentIndex::ES, index);
+                const auto value = read_port(port, width);
+                if (width == 8) write_linear8(address, static_cast<std::uint8_t>(value));
+                else if (width == 16) write_linear16(address, static_cast<std::uint16_t>(value));
+                else write_linear32(address, value);
+
+                const auto next = index + adjust;
+                if (address32) regs_.edi = next;
+                else regs_.edi = (regs_.edi & 0xFFFF0000u) | (next & 0xFFFFu);
+            } else {
+                const auto index = address32 ? regs_.esi : (regs_.esi & 0xFFFFu);
+                const auto source_segment = has_segment_override ? segment_override : SegmentIndex::DS;
+                const auto address = physical(source_segment, index);
+                std::uint32_t value = 0;
+                if (width == 8) value = read_linear8(address);
+                else if (width == 16) value = read_linear16(address);
+                else value = read_linear32(address);
+                write_port(port, width, value);
+
+                const auto next = index + adjust;
+                if (address32) regs_.esi = next;
+                else regs_.esi = (regs_.esi & 0xFFFF0000u) | (next & 0xFFFFu);
+            }
+
+            ++iterations;
+            if (!repeated) break;
+            --count;
+            if (address32) regs_.ecx = count;
+            else regs_.ecx = (regs_.ecx & 0xFFFF0000u) | (count & 0xFFFFu);
+        }
+
+        if (repeated && count != 0 && iterations == MaxStringIoIterationsPerStep)
+            regs_.eip = instruction_start;
+        return;
+    }
+
     // String instructions. REP/REPE/REPNE operate on CX or ECX according to
     // address size; SI/ESI and DI/EDI wrap at the active address width.
     const bool string_operation = opcode == 0xA4 || opcode == 0xA5 ||

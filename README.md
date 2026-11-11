@@ -2,7 +2,7 @@
 
 XP Revival is an original x86 PC emulator project targeting **Windows x64**. Its long-term goal is to boot a real, user-supplied Windows XP installation. It is not an XP desktop mock-up and does not wrap QEMU, Bochs, or another emulator.
 
-> **Development status: early PC emulator.** The project now has a connected CPU, primary-master ATA PIO disk, direct disk boot-sector handoff, and a RAM-backed VGA text display. Windows XP does **not** boot yet.
+> **Development status: early PC emulator.** The project now boots a real two-stage disk image: stage 1 reads sector 1 from the emulated primary-master ATA device using REP INSW, then far-jumps to stage 2. Stage 2 writes to the RAM-backed VGA text display. Windows XP does **not** boot yet.
 
 ## Windows target
 
@@ -47,18 +47,18 @@ The instruction budget can be raised for longer boot sectors with --steps N. Def
 - 32-bit ModRM/SIB effective-address decoding and segment overrides.
 - An experimental protected-mode entry subset: LGDT, MOV to/from selected control registers, CR0.PE transition, GDT code/data descriptors, segment-cache reloads, and far jump into a 32-bit code segment.
 - Initial 386 4 KiB paging: CR3 page-directory lookup, 10/10/12 address translation, PDE/PTE present and writable checks, CR0.WP supervisor write protection, CR2 page-fault address reporting, page-fault error-code recording, and page-table accessed/dirty bits.
-- x86 string operations (MOVS, CMPS, STOS, LODS, and SCAS), REP/REPE/REPNE counts, SI/DI direction handling, and DF-controlled traversal.
+- x86 string operations (MOVS, CMPS, STOS, LODS, SCAS, INS, and OUTS), REP/REPE/REPNE counts, SI/DI direction handling, and DF-controlled traversal. String port input/output uses the CPU's port-I/O bus.
 - Deterministic Intel Pentium III CPUID identity, instruction-count RDTSC, basic CLI/STI/CLD/STD controls, and IN/OUT instructions connected to a port-I/O bus.
 - Original primary-master ATA PIO device: IDENTIFY DEVICE, 28-bit LBA and basic CHS, READ SECTORS, WRITE SECTORS, FLUSH CACHE, task-file status/error registers, and software reset.
 - A connected PC boot path: reads disk sector 0, checks its 55 AA signature, loads it at 0000:7C00, initializes the conventional hard-disk boot registers (including DL=80h), and runs it through the CPU core.
 - A text-mode display buffer at physical B8000h. The console renderer reads the guest's character cells from that emulated memory.
-- A built-in raw disk demo. Its original 16-bit boot sector writes text to the display buffer, issues ATA IDENTIFY through x86 IN/OUT instructions, stores the returned device word in guest RAM, and halts. The PC tests verify this complete path.
+- A built-in two-stage raw disk demo. The original 16-bit first-stage boot sector programs the ATA task file, reads LBA 1 to 0000:8000 using REP INSW, and far-jumps to stage 2. The second-stage guest code copies character/attribute cells into VGA text memory and halts. The PC tests verify that sector 1 was fetched through emulated port I/O and that the second stage actually ran.
 
 ## Important limitations
 
 This is not yet a complete PC/AT-compatible computer. There is no BIOS firmware or BIOS interrupt service implementation, no interrupt controller or timer, no IRQ delivery, no PCI chipset, no keyboard/mouse, no graphics modes beyond the text-memory buffer, and no ATAPI/CD-ROM device. The direct boot handoff does not emulate the BIOS services expected by most existing MBRs or bootloaders. In particular, this is **not an ISO/Windows XP installer boot path**. Privilege-level enforcement, complete segmentation checks, LDT, TSS/task switching, IDT exception delivery, PSE/PAE, and a TLB are also incomplete.
 
-The current milestone proves that the original CPU core can start a real 16-bit boot sector from a raw IDE disk image, talk to the modeled ATA controller through port I/O, and write to the PC's conventional text display memory. It does not prove Windows compatibility.
+The current milestone proves that the CPU executes an actual two-stage 16-bit disk boot chain: guest code reads a second sector from the emulated IDE disk via REP INSW, transfers control to it, and writes to the conventional text buffer. It does not prove BIOS compatibility or Windows compatibility.
 
 ## Project direction
 
