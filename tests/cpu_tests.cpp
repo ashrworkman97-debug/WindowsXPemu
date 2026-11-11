@@ -16,7 +16,7 @@ int main() {
         0xB8, 0x34, 0x12, 0xBB, 0x78, 0x56, 0x90, 0xF4
     };
     cpu.load(program, 0x7C00);
-    auto& regs = const_cast<Cpu::Registers&>(cpu.registers());
+    auto& regs = cpu.registers();
     regs.cs = 0;
     regs.ip = 0x7C00;
     cpu.run(16);
