@@ -332,7 +332,7 @@ int main() {
 
     // REPE CMPSB stops at the first mismatch and leaves the mismatch flags.
     cpu.reset();
-    constexpr std::array<std::uint8_t, 14> repe_cmpsb_program{
+    constexpr std::array<std::uint8_t, 13> repe_cmpsb_program{
         0xBE, 0x00, 0x03, // MOV SI,0300h
         0xBF, 0x00, 0x04, // MOV DI,0400h
         0xB9, 0x03, 0x00, // MOV CX,3
