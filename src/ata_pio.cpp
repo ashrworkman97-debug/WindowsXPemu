@@ -309,17 +309,19 @@ void AtaPioDevice::write_port(std::uint16_t port, unsigned width, std::uint32_t 
         case 0x1F5: lba_high_ = byte; break;
         case 0x1F6: drive_head_ = byte; break;
         case 0x1F7: execute_command(byte); break;
-        case 0x3F6:
+        case 0x3F6: {
+            const bool was_reset = (device_control_ & 0x04u) != 0;
             device_control_ = byte;
             if ((byte & 0x04u) != 0) {
                 transfer_ = Transfer::None;
                 sectors_remaining_ = 0;
                 buffer_offset_ = 0;
                 status_ = StatusBusy;
-            } else if ((device_control_ & 0x04u) != 0) {
+            } else if (was_reset) {
                 software_reset();
             }
             break;
+        }
         default: break;
     }
 }
