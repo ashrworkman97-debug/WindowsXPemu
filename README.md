@@ -40,10 +40,12 @@ RAM can be selected from 1 to 2048 MiB. The default is 128 MiB. The current comm
 - 32-bit ModRM/SIB effective-address decoding and segment overrides.
 - An experimental protected-mode entry subset: LGDT, MOV to/from selected control registers, CR0.PE transition, GDT code/data descriptors, segment-cache reloads, and far jump into a 32-bit code segment.
 - Initial 386 4 KiB paging: CR3 page-directory lookup, 10/10/12 address translation, PDE/PTE present and writable checks, CR0.WP supervisor write protection, CR2 page-fault address reporting, page-fault error-code recording, and page-table accessed/dirty bits. Tests exercise a mapped non-identity page and a missing-page fault.
+- Initial x86 string instruction support: MOVS, CMPS, STOS, LODS, and SCAS byte/word/dword forms; REP/REPE/REPNE counts, SI/DI direction handling, and DF-controlled forward/backward traversal.
+- A deterministic virtual Intel Pentium III CPUID identity, a deterministic instruction-count RDTSC counter, basic CLI/STI/CLD/STD flag controls, and byte/word/dword IN/OUT instructions connected to a host-provided port-I/O callback bus.
 
 ## Major missing pieces
 
-This is not a complete 386 implementation. Privilege-level enforcement, full segmentation faults and limit enforcement, LDT, TSS/task switching, IDT and interrupt/exception delivery (page faults are recorded and halt the prototype rather than being dispatched through the IDT), PSE/4 MiB pages, PAE, a TLB, A20 behavior, firmware/BIOS services, PCI, PIT/PIC, IDE/ATAPI, VGA, keyboard, mouse, and CD-ROM boot are not implemented. Windows XP cannot be installed or run yet.
+This is not a complete 386/Pentium-class implementation. Privilege-level enforcement, full segmentation faults and limit enforcement, LDT, TSS/task switching, IDT and interrupt/exception delivery (page faults are recorded and halt the prototype rather than being dispatched through the IDT), PSE/4 MiB pages, PAE, a TLB, A20 behavior, firmware/BIOS services, a concrete PC I/O-device bus, PCI, PIT/PIC, IDE/ATAPI, VGA, keyboard, mouse, and CD-ROM boot are not implemented. The CPU I/O callbacks are only the attachment point; no chipset or disk has been connected yet. Windows XP cannot be installed or run yet.
 
 ## Project direction
 
