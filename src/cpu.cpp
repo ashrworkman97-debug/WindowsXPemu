@@ -19,6 +19,20 @@ Cpu::Cpu(std::size_t ram_bytes) : memory_(ram_bytes, std::uint8_t{0}) {
     reset();
 }
 
+void Cpu::set_io_callbacks(IoReadCallback read_callback, IoWriteCallback write_callback) {
+    io_read_callback_ = read_callback;
+    io_write_callback_ = write_callback;
+}
+
+std::uint32_t Cpu::read_port(std::uint16_t port, unsigned width) {
+    const auto mask = mask_for(width);
+    if (!io_read_callback_) return mask;
+    return io_read_callback_(port, width) & mask;
+}
+void Cpu::write_port(std::uint16_t port, unsigned width, std::uint32_t value) {
+    if (io_write_callback_) io_write_callback_(port, width, value & mask_for(width));
+}
+
 void Cpu::reset() {
     std::fill(memory_.begin(), memory_.end(), std::uint8_t{0});
     regs_ = {};
@@ -28,6 +42,7 @@ void Cpu::reset() {
     gdtr_base_ = 0;
     gdtr_limit_ = 0;
     last_page_fault_error_ = 0;
+    tsc_ = 0;
     halted_ = false;
     last_error_.clear();
     set_reset_state();
@@ -470,8 +485,10 @@ std::uint32_t Cpu::pop(bool operand32) {
 void Cpu::step() {
     if (halted_) return;
     try {
+    const auto instruction_start = regs_.eip;
     const bool default32 = segments_[static_cast<std::size_t>(SegmentIndex::CS)].default32;
     bool operand32 = default32, address32 = default32, has_segment_override = false;
+    std::uint8_t repeat_prefix = 0;
     SegmentIndex segment_override = SegmentIndex::DS;
     std::uint8_t opcode = fetch8();
     std::size_t prefix_count = 0;
@@ -486,6 +503,8 @@ void Cpu::step() {
             case 0x3E: segment_override = SegmentIndex::DS; has_segment_override = true; break;
             case 0x64: segment_override = SegmentIndex::FS; has_segment_override = true; break;
             case 0x65: segment_override = SegmentIndex::GS; has_segment_override = true; break;
+            case 0xF2: repeat_prefix = 0xF2; break;
+            case 0xF3: repeat_prefix = 0xF3; break;
             default: consumed = false; break;
         }
         if (!consumed) break;
@@ -516,6 +535,10 @@ void Cpu::step() {
 
     if (opcode == 0x90) return;
     if (opcode == 0xF4) { halted_ = true; return; }
+    if (opcode == 0xFA) { regs_.eflags &= ~Interrupt; return; } // CLI
+    if (opcode == 0xFB) { regs_.eflags |= Interrupt; return; }  // STI
+    if (opcode == 0xFC) { regs_.eflags &= ~Direction; return; } // CLD
+    if (opcode == 0xFD) { regs_.eflags |= Direction; return; }  // STD
 
     if (opcode == 0x0F) {
         const auto second = fetch8();
@@ -558,6 +581,34 @@ void Cpu::step() {
             return;
         }
 
+        if (second == 0xA2) { // CPUID: deterministic Intel Pentium III baseline.
+            const auto leaf = regs_.eax;
+            if (leaf == 0) {
+                regs_.eax = 1;
+                regs_.ebx = 0x756E6547u; // Genu
+                regs_.edx = 0x49656E69u; // ineI
+                regs_.ecx = 0x6C65746Eu; // ntel
+            } else if (leaf == 1) {
+                regs_.eax = 0x00000673u; // family 6, model 7, stepping 3
+                regs_.ebx = 0;
+                regs_.ecx = 0;
+                regs_.edx = (1u << 0) | (1u << 1) | (1u << 2) | (1u << 3) |
+                            (1u << 4) | (1u << 5) | (1u << 6) | (1u << 7) |
+                            (1u << 8) | (1u << 9) | (1u << 11) | (1u << 12) |
+                            (1u << 13) | (1u << 14) | (1u << 15) | (1u << 16) |
+                            (1u << 17) | (1u << 23) | (1u << 24) | (1u << 25);
+            } else {
+                regs_.eax = regs_.ebx = regs_.ecx = regs_.edx = 0;
+            }
+            return;
+        }
+        if (second == 0x31) { // Deterministic instruction-count timestamp counter.
+            ++tsc_;
+            regs_.eax = static_cast<std::uint32_t>(tsc_);
+            regs_.edx = static_cast<std::uint32_t>(tsc_ >> 32);
+            return;
+        }
+
         if (second == 0x01) {
             Operand rm{}; std::uint8_t group = 0;
             if (!decode_modrm(rm, group, address32, has_segment_override, segment_override)) return;
@@ -575,6 +626,26 @@ void Cpu::step() {
 
         last_error_ = "unsupported 0F opcode";
         halted_ = true;
+        return;
+    }
+
+
+    // IN/OUT: byte, word, and dword transfers using immediate or DX port numbers.
+    if ((opcode >= 0xE4 && opcode <= 0xE7) || (opcode >= 0xEC && opcode <= 0xEF)) {
+        const bool input = opcode == 0xE4 || opcode == 0xE5 || opcode == 0xEC || opcode == 0xED;
+        const bool byte_width = (opcode & 1u) == 0;
+        const unsigned width = byte_width ? 8u : (operand32 ? 32u : 16u);
+        const std::uint16_t port = opcode <= 0xE7
+            ? static_cast<std::uint16_t>(fetch8())
+            : static_cast<std::uint16_t>(regs_.edx);
+        if (input) {
+            const auto value = read_port(port, width);
+            if (width == 8) write_byte_register(0, static_cast<std::uint8_t>(value));
+            else write_general(0, operand32, value);
+        } else {
+            const auto value = width == 8 ? read_byte_register(0) : read_general(0, operand32);
+            write_port(port, width, value);
+        }
         return;
     }
 
@@ -744,6 +815,93 @@ void Cpu::step() {
         const auto lhs = read_operand(rm, width);
         const auto result = do_alu(group, lhs, immediate, width);
         if (group != 7) write_operand(rm, width, result);
+        return;
+    }
+
+
+    // String instructions. REP/REPE/REPNE operate on CX or ECX according to
+    // address size; SI/ESI and DI/EDI wrap at the active address width.
+    const bool string_operation = opcode == 0xA4 || opcode == 0xA5 ||
+        opcode == 0xA6 || opcode == 0xA7 || opcode == 0xAA || opcode == 0xAB ||
+        opcode == 0xAC || opcode == 0xAD || opcode == 0xAE || opcode == 0xAF;
+    if (string_operation) {
+        const bool byte_width = (opcode & 1u) == 0;
+        const unsigned width = byte_width ? 8u : (operand32 ? 32u : 16u);
+        const std::uint32_t element_size = width / 8u;
+        const bool repeated = repeat_prefix != 0;
+        const bool compare = opcode == 0xA6 || opcode == 0xA7 || opcode == 0xAE || opcode == 0xAF;
+        const bool uses_source = opcode == 0xA4 || opcode == 0xA5 ||
+                                 opcode == 0xA6 || opcode == 0xA7 ||
+                                 opcode == 0xAC || opcode == 0xAD;
+        const bool uses_destination = opcode == 0xA4 || opcode == 0xA5 ||
+                                      opcode == 0xA6 || opcode == 0xA7 ||
+                                      opcode == 0xAA || opcode == 0xAB ||
+                                      opcode == 0xAE || opcode == 0xAF;
+        auto index_value = [address32](std::uint32_t value) {
+            return address32 ? value : (value & 0xFFFFu);
+        };
+        auto store_index = [address32](std::uint32_t& target, std::uint32_t value) {
+            if (address32) target = value;
+            else target = (target & 0xFFFF0000u) | (value & 0xFFFFu);
+        };
+        const auto adjust = (regs_.eflags & Direction) != 0
+            ? (0u - element_size) : element_size;
+        auto count = repeated ? (address32 ? regs_.ecx : (regs_.ecx & 0xFFFFu)) : 1u;
+        if (repeated && count == 0) return;
+
+        constexpr std::uint32_t MaxStringIterationsPerStep = 65536u;
+        std::uint32_t iterations = 0;
+        bool keep_repeating = true;
+        while (count != 0 && iterations < MaxStringIterationsPerStep) {
+            const auto source_index = index_value(regs_.esi);
+            const auto destination_index = index_value(regs_.edi);
+            const auto source_segment = has_segment_override ? segment_override : SegmentIndex::DS;
+            const auto source_address = uses_source ? physical(source_segment, source_index) : 0u;
+            const auto destination_address = uses_destination
+                ? physical(SegmentIndex::ES, destination_index) : 0u;
+
+            auto read_element = [this, width](std::uint32_t address) {
+                if (width == 8) return static_cast<std::uint32_t>(read_linear8(address));
+                if (width == 16) return static_cast<std::uint32_t>(read_linear16(address));
+                return read_linear32(address);
+            };
+            auto write_element = [this, width](std::uint32_t address, std::uint32_t value) {
+                if (width == 8) write_linear8(address, static_cast<std::uint8_t>(value));
+                else if (width == 16) write_linear16(address, static_cast<std::uint16_t>(value));
+                else write_linear32(address, value);
+            };
+
+            if (opcode == 0xA4 || opcode == 0xA5) {
+                write_element(destination_address, read_element(source_address));
+            } else if (opcode == 0xAA || opcode == 0xAB) {
+                write_element(destination_address, read_general(0, width == 32));
+            } else if (opcode == 0xAC || opcode == 0xAD) {
+                const auto value = read_element(source_address);
+                if (width == 8) write_byte_register(0, static_cast<std::uint8_t>(value));
+                else write_general(0, width == 32, value);
+            } else if (opcode == 0xA6 || opcode == 0xA7) {
+                (void)subtract(read_element(source_address), read_element(destination_address), width);
+            } else {
+                (void)subtract(read_general(0, width == 32), read_element(destination_address), width);
+            }
+
+            if (uses_source) store_index(regs_.esi, source_index + adjust);
+            if (uses_destination) store_index(regs_.edi, destination_index + adjust);
+            ++iterations;
+
+            if (!repeated) break;
+            --count;
+            if (address32) regs_.ecx = count;
+            else regs_.ecx = (regs_.ecx & 0xFFFF0000u) | (count & 0xFFFFu);
+            if (count == 0) { keep_repeating = false; break; }
+            if (compare) {
+                const bool zero = (regs_.eflags & Zero) != 0;
+                keep_repeating = repeat_prefix == 0xF3 ? zero : !zero;
+                if (!keep_repeating) break;
+            }
+        }
+        if (repeated && count != 0 && keep_repeating && iterations == MaxStringIterationsPerStep)
+            regs_.eip = instruction_start;
         return;
     }
 
