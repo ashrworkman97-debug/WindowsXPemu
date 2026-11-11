@@ -29,9 +29,9 @@ int main(int argc, char** argv) {
     }
 
     if (!program_path) {
-        std::cout << "XP Revival CPU prototype 0.2.0\n"
+        std::cout << "XP Revival CPU prototype 0.3.0\n"
                   << "Usage: xprevival [--ram-mib N] <raw-real-mode-binary>\n"
-                  << "Default RAM: 128 MiB (CPU currently executes real-mode code only).\n";
+                  << "Default RAM: 128 MiB (386-width registers; real mode only).\n";
         return 0;
     }
 
@@ -41,9 +41,6 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    // Read byte-by-byte into an unsigned buffer. Besides avoiding the
-    // most-vexing-parse trap, this preserves all byte values on signed-char
-    // platforms.
     std::vector<std::uint8_t> program;
     for (char byte{}; input.get(byte);) {
         program.push_back(static_cast<std::uint8_t>(static_cast<unsigned char>(byte)));
@@ -55,21 +52,21 @@ int main(int argc, char** argv) {
 
     try {
         xprevival::Cpu cpu(ram_mib * 1024u * 1024u);
-        // Test binaries are loaded at 0000:7C00. This harness does not yet
-        // implement BIOS services or boot a disk/ISO.
         cpu.load(program, 0x7C00);
         auto& regs = cpu.registers();
         regs.cs = 0x0000;
-        regs.ip = 0x7C00;
+        regs.eip = 0x7C00;
+        regs.ss = 0x0000;
+        regs.esp = 0x7C00;
 
         cpu.run(100000);
         const auto& r = cpu.registers();
         std::cout << "RAM=" << cpu.ram_size() / (1024u * 1024u) << " MiB "
-                  << "AX=" << std::hex << std::setw(4) << std::setfill('0') << r.ax
-                  << " BX=" << std::setw(4) << r.bx
-                  << " CX=" << std::setw(4) << r.cx
-                  << " DX=" << std::setw(4) << r.dx
-                  << " CS:IP=" << std::setw(4) << r.cs << ':' << std::setw(4) << r.ip
+                  << "EAX=" << std::hex << std::setw(8) << std::setfill('0') << r.eax
+                  << " EBX=" << std::setw(8) << r.ebx
+                  << " ECX=" << std::setw(8) << r.ecx
+                  << " EDX=" << std::setw(8) << r.edx
+                  << " CS:EIP=" << std::setw(4) << r.cs << ':' << std::setw(8) << r.eip
                   << std::dec << '\n';
         if (!cpu.last_error().empty()) {
             std::cerr << cpu.last_error() << '\n';
