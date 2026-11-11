@@ -40,6 +40,7 @@ public:
     void step();
     void run(std::size_t instruction_limit);
 
+    [[nodiscard]] Registers& registers() noexcept { return regs_; }
     [[nodiscard]] const Registers& registers() const noexcept { return regs_; }
     [[nodiscard]] std::uint8_t read8(std::uint32_t address) const;
     [[nodiscard]] std::uint16_t read16(std::uint32_t address) const;
