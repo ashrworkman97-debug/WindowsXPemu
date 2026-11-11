@@ -24,6 +24,7 @@ public:
         std::uint16_t cs{}, ds{}, es{}, ss{}, fs{}, gs{};
         std::uint32_t eip{};
         std::uint32_t eflags{0x00000002};
+        std::uint32_t cr0{}, cr2{}, cr3{}, cr4{};
     };
 
     explicit Cpu(std::size_t ram_bytes = default_ram_size);
@@ -46,13 +47,23 @@ public:
     [[nodiscard]] const std::string& last_error() const noexcept { return last_error_; }
 
 private:
+    enum class SegmentIndex : std::uint8_t { ES, CS, SS, DS, FS, GS };
+
+    struct SegmentCache {
+        std::uint32_t base{};
+        std::uint32_t limit{0xFFFF};
+        bool default32{false};
+        bool valid{true};
+    };
+
     struct Operand {
         bool is_register{};
         std::uint8_t reg{};
         std::uint32_t address{};
     };
 
-    [[nodiscard]] std::uint32_t physical(std::uint16_t segment, std::uint16_t offset) const noexcept;
+    [[nodiscard]] std::uint32_t physical(SegmentIndex segment, std::uint32_t offset) const noexcept;
+    [[nodiscard]] bool load_segment(SegmentIndex segment, std::uint16_t selector);
     [[nodiscard]] std::uint8_t fetch8();
     [[nodiscard]] std::uint16_t fetch16();
     [[nodiscard]] std::uint32_t fetch32();
@@ -61,7 +72,7 @@ private:
     [[nodiscard]] std::uint8_t read_byte_register(std::uint8_t index) const noexcept;
     void write_byte_register(std::uint8_t index, std::uint8_t value) noexcept;
     [[nodiscard]] bool decode_modrm(Operand& rm, std::uint8_t& reg, bool address32,
-                                    bool has_segment_override, std::uint16_t segment_override);
+                                    bool has_segment_override, SegmentIndex segment_override);
     [[nodiscard]] std::uint32_t read_operand(const Operand& operand, unsigned width) const;
     void write_operand(const Operand& operand, unsigned width, std::uint32_t value);
     [[nodiscard]] std::uint32_t add(std::uint32_t lhs, std::uint32_t rhs, unsigned width) noexcept;
@@ -73,6 +84,9 @@ private:
     [[nodiscard]] std::uint32_t pop(bool operand32);
 
     std::vector<std::uint8_t> memory_;
+    SegmentCache segments_[6]{};
+    std::uint32_t gdtr_base_{};
+    std::uint16_t gdtr_limit_{};
     Registers regs_{};
     bool halted_{false};
     std::string last_error_{};
