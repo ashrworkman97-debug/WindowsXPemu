@@ -230,6 +230,197 @@ int main() {
     CHECK(cpu.last_page_fault_error_code() == 0u);
     CHECK(cpu.last_error().find("page fault") != std::string::npos);
 
+
+    // REP MOVSB copies CX bytes and advances SI/DI using the active direction flag.
+    cpu.reset();
+    constexpr std::array<std::uint8_t, 12> rep_movsb_program{
+        0xB9, 0x03, 0x00, // MOV CX,3
+        0xBE, 0x00, 0x03, // MOV SI,0300h
+        0xBF, 0x00, 0x04, // MOV DI,0400h
+        0xF3, 0xA4,       // REP MOVSB
+        0xF4
+    };
+    cpu.write8(0x0300, 0xA1);
+    cpu.write8(0x0301, 0xB2);
+    cpu.write8(0x0302, 0xC3);
+    cpu.load(rep_movsb_program, 0x7C00);
+    regs.cs = 0; regs.ds = 0; regs.es = 0; regs.eip = 0x7C00;
+    cpu.run(16);
+    CHECK(cpu.read8(0x0400) == 0xA1);
+    CHECK(cpu.read8(0x0401) == 0xB2);
+    CHECK(cpu.read8(0x0402) == 0xC3);
+    CHECK((cpu.registers().ecx & 0xFFFFu) == 0);
+    CHECK((cpu.registers().esi & 0xFFFFu) == 0x0303);
+    CHECK((cpu.registers().edi & 0xFFFFu) == 0x0403);
+    CHECK(cpu.halted());
+
+
+    // REP STOSB must store AL (not AX) to each ES:DI byte.
+    cpu.reset();
+    constexpr std::array<std::uint8_t, 11> rep_stosb_program{
+        0xB9, 0x03, 0x00, // MOV CX,3
+        0xB0, 0x5A,       // MOV AL,5Ah
+        0xBF, 0x00, 0x05, // MOV DI,0500h
+        0xF3, 0xAA,       // REP STOSB
+        0xF4
+    };
+    cpu.load(rep_stosb_program, 0x7C00);
+    regs.cs = 0; regs.es = 0; regs.eip = 0x7C00;
+    cpu.run(16);
+    CHECK(cpu.read8(0x0500) == 0x5A);
+    CHECK(cpu.read8(0x0501) == 0x5A);
+    CHECK(cpu.read8(0x0502) == 0x5A);
+    CHECK((cpu.registers().ecx & 0xFFFFu) == 0);
+    CHECK((cpu.registers().edi & 0xFFFFu) == 0x0503);
+    CHECK(cpu.halted());
+
+    // STD makes REP MOVSB walk backwards.
+    cpu.reset();
+    constexpr std::array<std::uint8_t, 13> backwards_program{
+        0xBE, 0x02, 0x03, // MOV SI,0302h
+        0xBF, 0x02, 0x04, // MOV DI,0402h
+        0xB9, 0x03, 0x00, // MOV CX,3
+        0xFD,             // STD
+        0xF3, 0xA4,       // REP MOVSB
+        0xF4
+    };
+    cpu.write8(0x0300, 0x11);
+    cpu.write8(0x0301, 0x22);
+    cpu.write8(0x0302, 0x33);
+    cpu.load(backwards_program, 0x7C00);
+    regs.cs = 0; regs.ds = 0; regs.es = 0; regs.eip = 0x7C00;
+    cpu.run(16);
+    CHECK(cpu.read8(0x0400) == 0x11);
+    CHECK(cpu.read8(0x0401) == 0x22);
+    CHECK(cpu.read8(0x0402) == 0x33);
+    CHECK((cpu.registers().esi & 0xFFFFu) == 0x02FF);
+    CHECK((cpu.registers().edi & 0xFFFFu) == 0x03FF);
+    CHECK((cpu.registers().eflags & Cpu::Direction) != 0);
+    CHECK(cpu.halted());
+
+    // CPUID reports the fixed virtual Intel CPU identity/features.
+    cpu.reset();
+    constexpr std::array<std::uint8_t, 8> cpuid_program{
+        0xB8, 0x00, 0x00, 0x00, 0x00, // MOV EAX,0
+        0x0F, 0xA2,                   // CPUID
+        0xF4
+    };
+    cpu.load(cpuid_program, 0x7C00);
+    regs.cs = 0; regs.eip = 0x7C00;
+    cpu.run(8);
+    CHECK(cpu.registers().eax == 1);
+    CHECK(cpu.registers().ebx == 0x756E6547u);
+    CHECK(cpu.registers().edx == 0x49656E69u);
+    CHECK(cpu.registers().ecx == 0x6C65746Eu);
+    CHECK(cpu.halted());
+
+
+
+    // CPUID's feature mask advertises the implemented TSC and no unmodeled extensions.
+    cpu.reset();
+    constexpr std::array<std::uint8_t, 8> cpuid_features_program{
+        0xB8, 0x01, 0x00, 0x00, 0x00, // MOV EAX,1
+        0x0F, 0xA2,                   // CPUID
+        0xF4
+    };
+    cpu.load(cpuid_features_program, 0x7C00);
+    regs.cs = 0; regs.eip = 0x7C00;
+    cpu.run(8);
+    CHECK(cpu.registers().eax == 0x00000673u);
+    CHECK(cpu.registers().edx == (1u << 4)); // TSC only
+    CHECK(cpu.halted());
+
+    // REPE CMPSB stops at the first mismatch and leaves the mismatch flags.
+    cpu.reset();
+    constexpr std::array<std::uint8_t, 13> repe_cmpsb_program{
+        0xBE, 0x00, 0x03, // MOV SI,0300h
+        0xBF, 0x00, 0x04, // MOV DI,0400h
+        0xB9, 0x03, 0x00, // MOV CX,3
+        0xF3, 0xA6,       // REPE CMPSB
+        0xF4,             // HLT
+        0x90
+    };
+    cpu.write8(0x0300, 0x11); cpu.write8(0x0301, 0x22); cpu.write8(0x0302, 0x33);
+    cpu.write8(0x0400, 0x11); cpu.write8(0x0401, 0x99); cpu.write8(0x0402, 0x33);
+    cpu.load(repe_cmpsb_program, 0x7C00);
+    regs.cs = 0; regs.ds = 0; regs.es = 0; regs.eip = 0x7C00;
+    cpu.run(16);
+    CHECK((cpu.registers().ecx & 0xFFFFu) == 1);
+    CHECK((cpu.registers().esi & 0xFFFFu) == 0x0302);
+    CHECK((cpu.registers().edi & 0xFFFFu) == 0x0402);
+    CHECK((cpu.registers().eflags & Cpu::Zero) == 0);
+    CHECK(cpu.halted());
+
+    // REPE SCASB uses AL (not AX) while scanning ES:DI.
+    cpu.reset();
+    constexpr std::array<std::uint8_t, 12> repe_scasb_program{
+        0xB0, 0x5A,       // MOV AL,5Ah
+        0xBF, 0x00, 0x05, // MOV DI,0500h
+        0xB9, 0x02, 0x00, // MOV CX,2
+        0xF3, 0xAE,       // REPE SCASB
+        0xF4,
+        0x90
+    };
+    cpu.write8(0x0500, 0x5A); cpu.write8(0x0501, 0x6B);
+    cpu.load(repe_scasb_program, 0x7C00);
+    regs.cs = 0; regs.es = 0; regs.eip = 0x7C00;
+    cpu.run(16);
+    CHECK((cpu.registers().ecx & 0xFFFFu) == 0);
+    CHECK((cpu.registers().edi & 0xFFFFu) == 0x0502);
+    CHECK((cpu.registers().eax & 0xFFu) == 0x5A);
+    CHECK((cpu.registers().eflags & Cpu::Zero) == 0);
+    CHECK(cpu.halted());
+
+    // RDTSC advances a deterministic virtual counter rather than wall-clock time.
+    cpu.reset();
+    constexpr std::array<std::uint8_t, 3> rdtsc_program{0x0F, 0x31, 0xF4};
+    cpu.load(rdtsc_program, 0x7C00);
+    regs.cs = 0; regs.eip = 0x7C00;
+    cpu.run(8);
+    CHECK(cpu.registers().eax == 1);
+    CHECK(cpu.registers().edx == 0);
+    CHECK(cpu.halted());
+
+    // Port I/O is delegated to the PC/device bus callbacks.
+    cpu.reset();
+    std::uint16_t observed_port = 0;
+    std::uint32_t observed_value = 0;
+    cpu.set_io_callbacks(
+        [&](std::uint16_t port, unsigned width) {
+            CHECK(port == 0x1234);
+            CHECK(width == 8);
+            return observed_value;
+        },
+        [&](std::uint16_t port, unsigned width, std::uint32_t value) {
+            observed_port = port;
+            CHECK(width == 8);
+            observed_value = value;
+        });
+    constexpr std::array<std::uint8_t, 8> io_program{
+        0xBA, 0x34, 0x12, // MOV DX,1234h
+        0xB0, 0x5A,       // MOV AL,5Ah
+        0xEE,             // OUT DX,AL
+        0xEC,             // IN AL,DX
+        0xF4
+    };
+    cpu.load(io_program, 0x7C00);
+    regs.cs = 0; regs.eip = 0x7C00;
+    cpu.run(16);
+    CHECK(observed_port == 0x1234);
+    CHECK(observed_value == 0x5A);
+    CHECK((cpu.registers().eax & 0xFFu) == 0x5A);
+    CHECK(cpu.halted());
+
+    // CLI/STI and CLD/STD expose the basic IF and DF controls.
+    cpu.reset();
+    constexpr std::array<std::uint8_t, 5> flags_program{0xFA, 0xFD, 0xFB, 0xFC, 0xF4};
+    cpu.load(flags_program, 0x7C00);
+    regs.cs = 0; regs.eip = 0x7C00;
+    cpu.run(8);
+    CHECK((cpu.registers().eflags & Cpu::Interrupt) != 0);
+    CHECK((cpu.registers().eflags & Cpu::Direction) == 0);
+    CHECK(cpu.halted());
+
     // The RAM backing store reaches beyond the original 1 MiB limit.
     cpu.write32(2u * 1024u * 1024u, 0xDEADBEEFu);
     CHECK(cpu.read32(2u * 1024u * 1024u) == 0xDEADBEEFu);
