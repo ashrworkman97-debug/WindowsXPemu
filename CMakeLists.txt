@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(XP_Revival VERSION 0.9.4 LANGUAGES CXX)
+project(XP_Revival VERSION 0.10.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -8,6 +8,8 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 add_library(xprevival_core
     src/cpu.cpp
     src/ata_pio.cpp
+    src/atapi.cpp
+    src/ide_channel.cpp
     src/pc.cpp
 )
 target_include_directories(xprevival_core PUBLIC include)
@@ -29,3 +31,7 @@ add_test(NAME cpu_tests COMMAND cpu_tests)
 add_executable(pc_tests tests/pc_tests.cpp)
 target_link_libraries(pc_tests PRIVATE xprevival_core)
 add_test(NAME pc_tests COMMAND pc_tests)
+
+add_executable(atapi_tests tests/atapi_tests.cpp)
+target_link_libraries(atapi_tests PRIVATE xprevival_core)
+add_test(NAME atapi_tests COMMAND atapi_tests)

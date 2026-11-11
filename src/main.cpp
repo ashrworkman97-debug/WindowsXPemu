@@ -48,12 +48,12 @@ void write_binary(const std::string& path, const std::vector<std::uint8_t>& byte
 
 void print_help() {
     std::cout
-        << "XP Revival PC emulator 0.9.4 (Windows x64)\n"
+        << "XP Revival PC emulator 0.10.0 (Windows x64)\n"
         << "Usage:\n"
-        << "  xprevival.exe --demo [--ram-mib N] [--steps N]\n"
-        << "  xprevival.exe --disk <raw-disk.img> [--ram-mib N] [--steps N] [--write-disk]\n"
+        << "  xprevival.exe --demo [--cdrom <image.iso>] [--ram-mib N] [--steps N]\n"
+        << "  xprevival.exe --disk <raw-disk.img> [--cdrom <image.iso>] [--ram-mib N] [--steps N] [--write-disk]\n"
         << "  xprevival.exe [--ram-mib N] <raw-x86-binary>\n\n"
-        << "The disk path loads sector 0 at 0000:7C00 and connects primary-master ATA PIO.\n"
+        << "The disk path loads sector 0 at 0000:7C00. --cdrom attaches an ISO as primary-slave ATAPI.\n"
         << "Disk writes stay in memory unless --write-disk is supplied.\n"
         << "Default RAM: 128 MiB; default instruction budget: 1,000,000.\n"
         << "This is an early PC prototype, not yet a Windows XP or ISO boot emulator.\n";
@@ -65,6 +65,7 @@ int main(int argc, char** argv) {
     std::size_t ram_mib = xprevival::Cpu::default_ram_size / (1024u * 1024u);
     std::size_t instruction_limit = 1000000;
     std::string disk_path;
+    std::string cdrom_path;
     std::string program_path;
     bool demo = false;
     bool write_disk = false;
@@ -92,6 +93,12 @@ int main(int argc, char** argv) {
                 return 1;
             }
             disk_path = argv[++i];
+        } else if (arg == "--cdrom" && i + 1 < argc) {
+            if (!cdrom_path.empty()) {
+                std::cerr << "Only one CD-ROM image can be attached.\n";
+                return 1;
+            }
+            cdrom_path = argv[++i];
         } else if (arg == "--demo") {
             demo = true;
         } else if (arg == "--write-disk") {
@@ -109,7 +116,7 @@ int main(int argc, char** argv) {
 
     const bool disk_mode = demo || !disk_path.empty();
     if ((demo && !disk_path.empty()) || (disk_mode && !program_path.empty()) ||
-        (write_disk && (demo || disk_path.empty()))) {
+        (!cdrom_path.empty() && !disk_mode) || (write_disk && (demo || disk_path.empty()))) {
         std::cerr << "Choose either --demo, --disk <image>, or a raw program; --write-disk only applies to --disk.\n";
         return 1;
     }
@@ -118,7 +125,9 @@ int main(int argc, char** argv) {
         const auto ram_bytes = ram_mib * 1024u * 1024u;
         if (disk_mode) {
             auto image = demo ? xprevival::make_demo_disk_image() : read_binary(disk_path);
-            xprevival::Pc pc(std::move(image), ram_bytes);
+            xprevival::Pc pc = cdrom_path.empty()
+                ? xprevival::Pc(std::move(image), ram_bytes)
+                : xprevival::Pc(std::move(image), read_binary(cdrom_path), ram_bytes);
             pc.boot();
             const auto executed = pc.run(instruction_limit);
 
@@ -126,6 +135,9 @@ int main(int argc, char** argv) {
                       << "RAM: " << ram_mib << " MiB\n"
                       << "Primary-master IDE: " << pc.disk().image().size() / 512u << " sectors\n"
                       << "Instructions executed: " << executed << '\n'
+                      << "Primary-slave ATAPI CD-ROM: " << (pc.cdrom().has_media()
+                            ? std::to_string(pc.cdrom().image().size() / xprevival::AtapiCdromDevice::sector_bytes) + " 2048-byte sectors"
+                            : "not mounted") << '\n'
                       << "VGA text memory (B800:0000):\n"
                       << pc.text_screen();
 

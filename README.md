@@ -25,7 +25,7 @@ Run the built-in machine boot demonstration:
 
     .\build\Release\xprevival.exe --demo
 
-Boot a raw IDE disk image (512-byte sectors, MBR/boot-sector signature 55 AA):
+Boot a raw IDE disk image (512-byte sectors, MBR/boot-sector signature 55 AA), optionally mounting a user-supplied ISO on the primary-slave ATAPI CD-ROM:
 
     .\build\Release\xprevival.exe --disk .\disk.img --ram-mib 256
 
@@ -50,14 +50,14 @@ The instruction budget can be raised for longer boot sectors with --steps N. Def
 - Initial 386 4 KiB paging: CR3 page-directory lookup, 10/10/12 address translation, PDE/PTE present and writable checks, CR0.WP supervisor write protection, CR2 page-fault address reporting, page-fault error-code recording, and page-table accessed/dirty bits.
 - x86 string operations (MOVS, CMPS, STOS, LODS, SCAS, INS, and OUTS), REP/REPE/REPNE counts, SI/DI direction handling, and DF-controlled traversal. String port input/output uses the CPU's port-I/O bus.
 - Deterministic Intel Pentium III CPUID identity, instruction-count RDTSC, basic CLI/STI/CLD/STD controls, and IN/OUT instructions connected to a port-I/O bus.
-- Original primary-master ATA PIO device: IDENTIFY DEVICE, 28-bit LBA and basic CHS, READ SECTORS, WRITE SECTORS, FLUSH CACHE, task-file status/error registers, and software reset.
+- Original primary-master ATA PIO hard disk and primary-slave ATAPI PACKET CD-ROM on one shared IDE channel. ATAPI supports IDENTIFY PACKET DEVICE, PACKET, TEST UNIT READY, REQUEST SENSE, INQUIRY, READ CAPACITY, READ(10), READ TOC, and START/STOP. ISO sectors are 2048 bytes and are read through guest port I/O.
 - A connected PC boot path: reads disk sector 0, checks its 55 AA signature, loads it at 0000:7C00, initializes the conventional hard-disk boot registers (including DL=80h), and runs it through the CPU core.
 - A text-mode display buffer at physical B8000h. The console renderer reads the guest's character cells from that emulated memory.
 - A built-in two-stage raw disk demo. The original 16-bit first-stage boot sector programs the ATA task file, reads LBA 1 to 0000:8000 using REP INSW, and far-jumps to stage 2. The second-stage guest code uses LODSB, LOOP, and BIOS INT 10h teletype calls to display its message, then halts. The PC tests verify that sector 1 was fetched through emulated port I/O and that the second stage actually ran.
 
 ## Important limitations
 
-This is not yet a complete PC/AT-compatible computer. There is no BIOS ROM/POST/reset-vector firmware, but a limited native BIOS service model handles common INT 10h text services, INT 13h disk services (CHS and EDD reads), and INT 15h memory-map queries. Other software interrupts use the real-mode IVT; hardware IRQ delivery is not implemented, no interrupt controller or timer, no IRQ delivery, no PCI chipset, no keyboard/mouse, no graphics modes beyond the text-memory buffer, and no ATAPI/CD-ROM device. The direct boot handoff does not emulate the BIOS services expected by most existing MBRs or bootloaders. In particular, this is **not an ISO/Windows XP installer boot path**. Privilege-level enforcement, complete segmentation checks, LDT, TSS/task switching, IDT exception delivery, PSE/PAE, and a TLB are also incomplete.
+This is not yet a complete PC/AT-compatible computer. There is no BIOS ROM/POST/reset-vector firmware, but a limited native BIOS service model handles common INT 10h text services, INT 13h disk services (CHS and EDD reads), and INT 15h memory-map queries. Other software interrupts use the real-mode IVT; hardware IRQ delivery is not implemented, no interrupt controller or timer, no IRQ delivery, no PCI chipset, no keyboard/mouse, no graphics modes beyond the text-memory buffer. The ATAPI device can read a mounted ISO, but there is not yet El Torito CD boot-catalog handling or a Windows XP ISO boot path. The direct boot handoff does not emulate the BIOS services expected by most existing MBRs or bootloaders. In particular, this is **not an ISO/Windows XP installer boot path**. Privilege-level enforcement, complete segmentation checks, LDT, TSS/task switching, IDT exception delivery, PSE/PAE, and a TLB are also incomplete.
 
 The current milestone proves that the CPU executes an actual two-stage 16-bit disk boot chain: guest code reads a second sector from the emulated IDE disk via REP INSW, transfers control to it, and writes to the conventional text buffer. It does not prove BIOS compatibility or Windows compatibility.
 

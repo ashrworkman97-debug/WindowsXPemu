@@ -19,8 +19,13 @@ constexpr std::size_t vga_bytes = vga_columns * vga_rows * 2;
 }
 
 Pc::Pc(std::vector<std::uint8_t> disk_image, std::size_t ram_bytes)
-    : cpu_(ram_bytes), ata_(std::move(disk_image)) {
-    ata_.connect(cpu_);
+    : Pc(std::move(disk_image), std::vector<std::uint8_t>{}, ram_bytes) {}
+
+Pc::Pc(std::vector<std::uint8_t> disk_image, std::vector<std::uint8_t> cdrom_image,
+       std::size_t ram_bytes)
+    : cpu_(ram_bytes), ata_(std::move(disk_image)),
+      atapi_(std::move(cdrom_image)), ide_channel_(ata_, atapi_) {
+    ide_channel_.connect(cpu_);
     cpu_.set_software_interrupt_callback(
         [this](Cpu& cpu, std::uint8_t vector) { return handle_bios_interrupt(cpu, vector); });
 }
