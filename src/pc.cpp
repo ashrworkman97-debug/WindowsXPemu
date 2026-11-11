@@ -360,6 +360,24 @@ bool Pc::handle_bios_interrupt(Cpu& cpu, std::uint8_t vector) {
             return true;
         }
 
+        if ((registers.eax & 0xFFFFu) == 0xE801u) { // GET EXTENDED MEMORY SIZE, E801h
+            constexpr std::size_t one_mib = 1024u * 1024u;
+            constexpr std::size_t sixteen_mib = 16u * one_mib;
+            const auto ram_bytes = cpu.ram_size();
+            const auto below_16_mib_kib = std::min<std::size_t>(
+                ram_bytes > one_mib ? ram_bytes - one_mib : 0u, 15u * one_mib) / 1024u;
+            const auto above_16_mib_blocks = ram_bytes > sixteen_mib
+                ? (ram_bytes - sixteen_mib) / 65536u : 0u;
+            const auto ax = static_cast<std::uint16_t>(std::min<std::size_t>(below_16_mib_kib, 0xFFFFu));
+            const auto bx = static_cast<std::uint16_t>(std::min<std::size_t>(above_16_mib_blocks, 0xFFFFu));
+            registers.eax = (registers.eax & 0xFFFF0000u) | ax;
+            registers.ecx = (registers.ecx & 0xFFFF0000u) | ax;
+            registers.ebx = (registers.ebx & 0xFFFF0000u) | bx;
+            registers.edx = (registers.edx & 0xFFFF0000u) | bx;
+            set_interrupt_carry(cpu, false);
+            return true;
+        }
+
         if (get_ah() == 0x88) { // GET EXTENDED MEMORY SIZE, in KiB above 1 MiB
             const auto kib = (cpu.ram_size() - 0x00100000u) / 1024u;
             registers.eax = (registers.eax & 0xFFFF0000u) |
