@@ -820,8 +820,8 @@ void Cpu::step() {
     // String port I/O. INS reads DX into ES:DI/EDI; OUTS sends DS:SI/ESI
     // (or an explicitly overridden source segment) to DX. REP uses CX/ECX.
     if (opcode >= 0x6C && opcode <= 0x6F) {
-        const input = opcode == 0x6C || opcode == 0x6D;
-        const byte_width = opcode == 0x6C || opcode == 0x6E;
+        const bool input = opcode == 0x6C || opcode == 0x6D;
+        const bool byte_width = opcode == 0x6C || opcode == 0x6E;
         const unsigned width = byte_width ? 8u : (operand32 ? 32u : 16u);
         const std::uint32_t element_size = width / 8u;
         const bool repeated = repeat_prefix != 0;
