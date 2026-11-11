@@ -366,9 +366,6 @@ bool Pc::handle_bios_interrupt(Cpu& cpu, std::uint8_t vector) {
             bios_failure(0x01);
             return true;
         }
-            bios_failure(0x01);
-            return true;
-        }
 
         switch (get_ah()) {
             case 0x00: // RESET DISK SYSTEM
