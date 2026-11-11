@@ -25,7 +25,7 @@ int main(int argc, char** argv) {
     // Test binaries are loaded at 0000:7C00, the conventional boot-sector
     // address. This is a CPU-core harness, not a BIOS/PC boot implementation.
     cpu.load(program, 0x7C00);
-    auto& regs = const_cast<xprevival::Cpu::Registers&>(cpu.registers());
+    auto& regs = cpu.registers();
     regs.cs = 0x0000;
     regs.ip = 0x7C00;
 
