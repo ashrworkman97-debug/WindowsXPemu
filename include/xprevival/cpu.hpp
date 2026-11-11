@@ -1,16 +1,16 @@
 #pragma once
 
-#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <span>
 #include <string>
+#include <vector>
 
 namespace xprevival {
 
 class Cpu {
 public:
-    static constexpr std::size_t memory_size = 1024 * 1024;
+    static constexpr std::size_t default_ram_size = 128u * 1024u * 1024u;
 
     enum Flag : std::uint16_t {
         Carry = 1u << 0,
@@ -32,7 +32,7 @@ public:
         std::uint16_t flags{0x0002};
     };
 
-    Cpu();
+    explicit Cpu(std::size_t ram_bytes = default_ram_size);
 
     void reset();
     void load(std::span<const std::uint8_t> bytes, std::uint32_t physical_address);
@@ -40,6 +40,7 @@ public:
     void step();
     void run(std::size_t instruction_limit);
 
+    [[nodiscard]] std::size_t ram_size() const noexcept { return memory_.size(); }
     [[nodiscard]] Registers& registers() noexcept { return regs_; }
     [[nodiscard]] const Registers& registers() const noexcept { return regs_; }
     [[nodiscard]] std::uint8_t read8(std::uint32_t address) const;
@@ -53,9 +54,8 @@ private:
     [[nodiscard]] std::uint32_t physical(std::uint16_t segment, std::uint16_t offset) const noexcept;
     [[nodiscard]] std::uint8_t fetch8();
     [[nodiscard]] std::uint16_t fetch16();
-    void set_logic_flags(std::uint16_t value) noexcept;
 
-    std::array<std::uint8_t, memory_size> memory_{};
+    std::vector<std::uint8_t> memory_;
     Registers regs_{};
     bool halted_{false};
     std::string last_error_{};
