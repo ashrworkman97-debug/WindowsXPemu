@@ -53,7 +53,7 @@ The instruction budget can be raised for longer boot sectors with --steps N. Def
 - Original primary-master ATA PIO device: IDENTIFY DEVICE, 28-bit LBA and basic CHS, READ SECTORS, WRITE SECTORS, FLUSH CACHE, task-file status/error registers, and software reset.
 - A connected PC boot path: reads disk sector 0, checks its 55 AA signature, loads it at 0000:7C00, initializes the conventional hard-disk boot registers (including DL=80h), and runs it through the CPU core.
 - A text-mode display buffer at physical B8000h. The console renderer reads the guest's character cells from that emulated memory.
-- A built-in two-stage raw disk demo. The original 16-bit first-stage boot sector programs the ATA task file, reads LBA 1 to 0000:8000 using REP INSW, and far-jumps to stage 2. The second-stage guest code copies character/attribute cells into VGA text memory and halts. The PC tests verify that sector 1 was fetched through emulated port I/O and that the second stage actually ran.
+- A built-in two-stage raw disk demo. The original 16-bit first-stage boot sector programs the ATA task file, reads LBA 1 to 0000:8000 using REP INSW, and far-jumps to stage 2. The second-stage guest code uses LODSB, LOOP, and BIOS INT 10h teletype calls to display its message, then halts. The PC tests verify that sector 1 was fetched through emulated port I/O and that the second stage actually ran.
 
 ## Important limitations
 

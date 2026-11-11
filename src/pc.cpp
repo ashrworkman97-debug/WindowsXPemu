@@ -463,24 +463,21 @@ std::vector<std::uint8_t> make_demo_disk_image() {
     };
     std::copy(std::begin(stage_one), std::end(stage_one), image.begin());
 
-    // Stage 2 (LBA 1): copy VGA character/attribute words to B800:0000.
+    // Stage 2 (LBA 1): print the payload through BIOS INT 10h teletype.
+    // LODSB reads each guest byte; LOOP is guest-side control flow.
     constexpr std::uint8_t stage_two[] = {
-        0xB8, 0x00, 0xB8,       // MOV AX,B800h
-        0x8E, 0xC0,             // MOV ES,AX
         0xBE, 0x20, 0x80,       // MOV SI,8020h
-        0xBF, 0x00, 0x00,       // MOV DI,0000h
         0xB9, 0x18, 0x00,       // MOV CX,24
-        0xFC,                   // CLD
-        0xF3, 0xA5,             // REP MOVSW
+        0xAC,                   // LODSB
+        0xB4, 0x0E,             // MOV AH,0Eh
+        0xCD, 0x10,             // INT 10h (teletype output)
+        0xE2, 0xF9,             // LOOP back to LODSB
         0xF4                    // HLT
     };
     std::copy(std::begin(stage_two), std::end(stage_two), image.begin() + sector_bytes);
 
-    for (std::size_t i = 0; i < message.size(); ++i) {
-        const auto offset = sector_bytes + stage_two_message_offset + i * 2;
-        image[offset] = static_cast<std::uint8_t>(message[i]);
-        image[offset + 1] = 0x07; // VGA light-grey-on-black attribute
-    }
+    for (std::size_t i = 0; i < message.size(); ++i)
+        image[sector_bytes + stage_two_message_offset + i] = static_cast<std::uint8_t>(message[i]);
 
     image[510] = 0x55;
     image[511] = 0xAA;

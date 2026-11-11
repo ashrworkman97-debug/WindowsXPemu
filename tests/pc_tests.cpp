@@ -37,11 +37,11 @@ int main() {
     CHECK(pc.cpu().registers().eip == 0x7C00);
     CHECK((pc.cpu().registers().edx & 0xFFu) == 0x80u);
 
-    const auto executed = pc.run(128);
+    const auto executed = pc.run(256);
     CHECK(executed > 10);
     CHECK(pc.cpu().halted());
     CHECK(pc.cpu().last_error().empty());
-    CHECK(pc.cpu().read16(0x8000) == 0x00B8); // stage two was fetched from LBA 1
+    CHECK(pc.cpu().read16(0x8000) == 0x20BE); // stage two was fetched from LBA 1
     CHECK((pc.disk().status() & 0x08u) == 0); // ATA data request cleared after 256 words
     CHECK(pc.text_screen().find("XP REVIVAL - ATA BOOT OK") != std::string::npos);
 
