@@ -254,6 +254,50 @@ int main() {
     CHECK((cpu.registers().edi & 0xFFFFu) == 0x0403);
     CHECK(cpu.halted());
 
+
+    // REP STOSB must store AL (not AX) to each ES:DI byte.
+    cpu.reset();
+    constexpr std::array<std::uint8_t, 11> rep_stosb_program{
+        0xB9, 0x03, 0x00, // MOV CX,3
+        0xB0, 0x5A,       // MOV AL,5Ah
+        0xBF, 0x00, 0x05, // MOV DI,0500h
+        0xF3, 0xAA,       // REP STOSB
+        0xF4
+    };
+    cpu.load(rep_stosb_program, 0x7C00);
+    regs.cs = 0; regs.es = 0; regs.eip = 0x7C00;
+    cpu.run(16);
+    CHECK(cpu.read8(0x0500) == 0x5A);
+    CHECK(cpu.read8(0x0501) == 0x5A);
+    CHECK(cpu.read8(0x0502) == 0x5A);
+    CHECK((cpu.registers().ecx & 0xFFFFu) == 0);
+    CHECK((cpu.registers().edi & 0xFFFFu) == 0x0503);
+    CHECK(cpu.halted());
+
+    // STD makes REP MOVSB walk backwards.
+    cpu.reset();
+    constexpr std::array<std::uint8_t, 13> backwards_program{
+        0xBE, 0x02, 0x03, // MOV SI,0302h
+        0xBF, 0x02, 0x04, // MOV DI,0402h
+        0xB9, 0x03, 0x00, // MOV CX,3
+        0xFD,             // STD
+        0xF3, 0xA4,       // REP MOVSB
+        0xF4
+    };
+    cpu.write8(0x0300, 0x11);
+    cpu.write8(0x0301, 0x22);
+    cpu.write8(0x0302, 0x33);
+    cpu.load(backwards_program, 0x7C00);
+    regs.cs = 0; regs.ds = 0; regs.es = 0; regs.eip = 0x7C00;
+    cpu.run(16);
+    CHECK(cpu.read8(0x0400) == 0x11);
+    CHECK(cpu.read8(0x0401) == 0x22);
+    CHECK(cpu.read8(0x0402) == 0x33);
+    CHECK((cpu.registers().esi & 0xFFFFu) == 0x02FF);
+    CHECK((cpu.registers().edi & 0xFFFFu) == 0x03FF);
+    CHECK((cpu.registers().eflags & Cpu::Direction) != 0);
+    CHECK(cpu.halted());
+
     // CPUID reports the fixed virtual Intel CPU identity/features.
     cpu.reset();
     constexpr std::array<std::uint8_t, 8> cpuid_program{
