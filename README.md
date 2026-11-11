@@ -2,11 +2,11 @@
 
 XP Revival is an original x86 PC emulator project targeting **Windows x64**. Its long-term goal is to boot a real, user-supplied Windows XP installation. It is not an XP desktop mock-up and does not wrap QEMU, Bochs, or another emulator.
 
-> **Development status: early CPU/PC prototype. Windows XP does not boot yet.** There is no BIOS, disk controller, VGA device, ISO boot path, or Windows installer support at this stage.
+> **Development status: early PC emulator.** The project now has a connected CPU, primary-master ATA PIO disk, direct disk boot-sector handoff, and a RAM-backed VGA text display. Windows XP does **not** boot yet.
 
 ## Windows target
 
-The project is built and tested with the Windows x64 toolchain in GitHub Actions. The workflow uses Visual Studio's MSVC compiler, runs the CPU test executable, performs a command-line smoke test, and publishes the two Windows executables as a build artifact.
+The project is built and tested with the Windows x64 toolchain in GitHub Actions. The workflow uses Visual Studio's MSVC compiler, runs the CPU and PC boot tests, performs a command-line boot-demo smoke test, and publishes the Windows executables as a build artifact.
 
 Requirements for a local build:
 - Windows x64
@@ -17,20 +17,27 @@ Requirements for a local build:
 
 Open **x64 Native Tools Command Prompt for VS 2022** or a PowerShell terminal where CMake can find Visual Studio:
 
-```powershell
-cmake -S . -B build -A x64
-cmake --build build --config Release --parallel
-ctest --test-dir build -C Release --output-on-failure
-.\build\Release\xprevival.exe
-```
+    cmake -S . -B build -A x64
+    cmake --build build --config Release --parallel
+    ctest --test-dir build -C Release --output-on-failure
 
-To run a raw test binary with 256 MiB of emulated RAM:
+Run the built-in machine boot demonstration:
 
-```powershell
-.\build\Release\xprevival.exe --ram-mib 256 test.bin
-```
+    .\build\Release\xprevival.exe --demo
 
-RAM can be selected from 1 to 2048 MiB. The default is 128 MiB. The current command-line harness loads a raw test binary at physical address 0x7C00; it does **not** boot a disk or an ISO.
+Boot a raw IDE disk image (512-byte sectors, MBR/boot-sector signature 55 AA):
+
+    .\build\Release\xprevival.exe --disk .\disk.img --ram-mib 256
+
+The disk image is read into the emulator's virtual ATA device. Guest writes remain in memory unless you explicitly add --write-disk:
+
+    .\build\Release\xprevival.exe --disk .\disk.img --write-disk
+
+**Warning:** --write-disk writes the guest's modified image back over the named host file. Keep a backup.
+
+The instruction budget can be raised for longer boot sectors with --steps N. Default RAM is 128 MiB and can be selected from 1 to 2048 MiB. The legacy raw-binary CPU harness is still available:
+
+    .\build\Release\xprevival.exe --ram-mib 256 test.bin
 
 ## Current implementation
 
@@ -39,22 +46,27 @@ RAM can be selected from 1 to 2048 MiB. The default is 128 MiB. The current comm
 - Real-mode 8-, 16-, and 32-bit instruction paths, initial byte/word/dword MOV operations, ALU operations, branches, stack operations, and 16-bit ModRM effective addresses.
 - 32-bit ModRM/SIB effective-address decoding and segment overrides.
 - An experimental protected-mode entry subset: LGDT, MOV to/from selected control registers, CR0.PE transition, GDT code/data descriptors, segment-cache reloads, and far jump into a 32-bit code segment.
-- Initial 386 4 KiB paging: CR3 page-directory lookup, 10/10/12 address translation, PDE/PTE present and writable checks, CR0.WP supervisor write protection, CR2 page-fault address reporting, page-fault error-code recording, and page-table accessed/dirty bits. Tests exercise a mapped non-identity page and a missing-page fault.
-- Initial x86 string instruction support: MOVS, CMPS, STOS, LODS, and SCAS byte/word/dword forms; REP/REPE/REPNE counts, SI/DI direction handling, and DF-controlled forward/backward traversal.
-- A deterministic virtual Intel Pentium III CPUID identity, a deterministic instruction-count RDTSC counter, basic CLI/STI/CLD/STD flag controls, and byte/word/dword IN/OUT instructions connected to a host-provided port-I/O callback bus.
-- An original primary-master ATA PIO device attached to the CPU's port callbacks. It implements IDENTIFY DEVICE, 28-bit LBA and basic CHS addressing, READ SECTORS, WRITE SECTORS, FLUSH CACHE, task-file status/error registers, and software reset. Disk contents are held in a caller-supplied raw image buffer.
+- Initial 386 4 KiB paging: CR3 page-directory lookup, 10/10/12 address translation, PDE/PTE present and writable checks, CR0.WP supervisor write protection, CR2 page-fault address reporting, page-fault error-code recording, and page-table accessed/dirty bits.
+- x86 string operations (MOVS, CMPS, STOS, LODS, and SCAS), REP/REPE/REPNE counts, SI/DI direction handling, and DF-controlled traversal.
+- Deterministic Intel Pentium III CPUID identity, instruction-count RDTSC, basic CLI/STI/CLD/STD controls, and IN/OUT instructions connected to a port-I/O bus.
+- Original primary-master ATA PIO device: IDENTIFY DEVICE, 28-bit LBA and basic CHS, READ SECTORS, WRITE SECTORS, FLUSH CACHE, task-file status/error registers, and software reset.
+- A connected PC boot path: reads disk sector 0, checks its 55 AA signature, loads it at 0000:7C00, initializes the conventional hard-disk boot registers (including DL=80h), and runs it through the CPU core.
+- A text-mode display buffer at physical B8000h. The console renderer reads the guest's character cells from that emulated memory.
+- A built-in raw disk demo. Its original 16-bit boot sector writes text to the display buffer, issues ATA IDENTIFY through x86 IN/OUT instructions, stores the returned device word in guest RAM, and halts. The PC tests verify this complete path.
 
-## Major missing pieces
+## Important limitations
 
-This is not a complete 386/Pentium-class PC. Privilege-level enforcement, full segmentation faults and limit enforcement, LDT, TSS/task switching, IDT and interrupt/exception delivery (page faults are recorded and halt the prototype rather than being dispatched through the IDT), PSE/4 MiB pages, PAE, a TLB, A20 behavior, firmware/BIOS services, PCI, PIT/PIC, IRQ routing, secondary ATA channels, slave devices, ATAPI/CD-ROM, DMA, VGA, keyboard, mouse, and a bootable machine configuration are not implemented. The primary ATA device is a directly attached PIO component; the CLI does not yet load a user disk image or boot from it. Windows XP cannot be installed or run yet.
+This is not yet a complete PC/AT-compatible computer. There is no BIOS firmware or BIOS interrupt service implementation, no interrupt controller or timer, no IRQ delivery, no PCI chipset, no keyboard/mouse, no graphics modes beyond the text-memory buffer, and no ATAPI/CD-ROM device. The direct boot handoff does not emulate the BIOS services expected by most existing MBRs or bootloaders. In particular, this is **not an ISO/Windows XP installer boot path**. Privilege-level enforcement, complete segmentation checks, LDT, TSS/task switching, IDT exception delivery, PSE/PAE, and a TLB are also incomplete.
+
+The current milestone proves that the original CPU core can start a real 16-bit boot sector from a raw IDE disk image, talk to the modeled ATA controller through port I/O, and write to the PC's conventional text display memory. It does not prove Windows compatibility.
 
 ## Project direction
 
-1. Expand the 386 CPU core, segmentation, paging, privilege checks, and exception delivery.
-2. Add firmware mapping and BIOS boot services.
-3. Implement a PC chipset and bootable floppy/IDE/ATAPI devices.
-4. Add VGA-compatible video and keyboard/mouse input.
-5. Build the Windows configuration UI, virtual disks, ISO selection, and machine controls.
+1. Complete protected-mode privilege checks and exception/interrupt delivery.
+2. Implement BIOS firmware services and a realistic PC chipset.
+3. Expand IDE/ATAPI and bootable floppy/disk support.
+4. Implement VGA hardware behavior plus keyboard/mouse input.
+5. Add a Windows configuration UI, virtual disks, ISO selection, and machine controls.
 6. Reach Windows XP setup, installation, and desktop compatibility with user-provided media.
 
 ## Legal note

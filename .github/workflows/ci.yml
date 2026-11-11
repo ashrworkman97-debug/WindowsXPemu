@@ -22,13 +22,13 @@ jobs:
       - name: Build Release
         run: cmake --build build --config Release --parallel
 
-      - name: Run CPU tests
+      - name: Run CPU and PC tests
         run: ctest --test-dir build -C Release --output-on-failure
 
-      - name: Smoke-test command-line executable
+      - name: Smoke-test original PC disk boot
         shell: pwsh
         run: |
-          & .\build\Release\xprevival.exe
+          & .\build\Release\xprevival.exe --demo
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Publish Windows x64 binaries
@@ -38,4 +38,5 @@ jobs:
           path: |
             build/Release/xprevival.exe
             build/Release/cpu_tests.exe
+            build/Release/pc_tests.exe
           if-no-files-found: error
