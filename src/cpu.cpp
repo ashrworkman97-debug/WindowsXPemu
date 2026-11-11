@@ -4,10 +4,15 @@
 
 namespace xprevival {
 
-Cpu::Cpu() { reset(); }
+Cpu::Cpu(std::size_t ram_bytes) : memory_(ram_bytes, 0) {
+    if (ram_bytes < 1024u * 1024u) {
+        throw std::invalid_argument("emulated RAM must be at least 1 MiB");
+    }
+    reset();
+}
 
 void Cpu::reset() {
-    memory_.fill(0);
+    std::fill(memory_.begin(), memory_.end(), 0);
     regs_ = {};
     regs_.flags = 0x0002;
     halted_ = false;
@@ -16,28 +21,29 @@ void Cpu::reset() {
 }
 
 void Cpu::set_reset_state() {
-    // 8086-compatible reset entry point. The full PC model will later map
-    // firmware at this address; this core starts at F000:FFF0.
+    // Temporary real-mode reset entry. A future PC model will map firmware
+    // into the top of the physical address space and provide the reset vector.
     regs_.cs = 0xF000;
     regs_.ip = 0xFFF0;
     halted_ = false;
 }
 
 void Cpu::load(std::span<const std::uint8_t> bytes, std::uint32_t address) {
-    if (address >= memory_.size() || bytes.size() > memory_.size() - address) {
-        throw std::out_of_range("program does not fit in emulated memory");
+    if (address > memory_.size() || bytes.size() > memory_.size() - address) {
+        throw std::out_of_range("program does not fit in emulated RAM");
     }
-    for (std::size_t i = 0; i < bytes.size(); ++i) {
-        memory_[address + i] = bytes[i];
-    }
+    std::copy(bytes.begin(), bytes.end(), memory_.begin() + address);
 }
 
 std::uint32_t Cpu::physical(std::uint16_t segment, std::uint16_t offset) const noexcept {
-    return ((static_cast<std::uint32_t>(segment) << 4) + offset) & 0xFFFFF;
+    // The current interpreter is still real-mode only. A20 and protected-mode
+    // address translation are not implemented yet.
+    return (static_cast<std::uint32_t>(segment) << 4) + offset;
 }
 
 std::uint8_t Cpu::read8(std::uint32_t address) const {
-    return memory_[address & 0xFFFFF];
+    if (address >= memory_.size()) throw std::out_of_range("RAM read out of range");
+    return memory_[address];
 }
 
 std::uint16_t Cpu::read16(std::uint32_t address) const {
@@ -47,7 +53,8 @@ std::uint16_t Cpu::read16(std::uint32_t address) const {
 }
 
 void Cpu::write8(std::uint32_t address, std::uint8_t value) {
-    memory_[address & 0xFFFFF] = value;
+    if (address >= memory_.size()) throw std::out_of_range("RAM write out of range");
+    memory_[address] = value;
 }
 
 void Cpu::write16(std::uint32_t address, std::uint16_t value) {
@@ -65,16 +72,6 @@ std::uint16_t Cpu::fetch16() {
     const auto lo = fetch8();
     const auto hi = fetch8();
     return static_cast<std::uint16_t>(lo | (static_cast<std::uint16_t>(hi) << 8));
-}
-
-void Cpu::set_logic_flags(std::uint16_t value) noexcept {
-    regs_.flags &= static_cast<std::uint16_t>(~(Zero | Sign | Parity | Carry | Overflow));
-    if (value == 0) regs_.flags |= Zero;
-    if ((value & 0x8000) != 0) regs_.flags |= Sign;
-    auto low = static_cast<std::uint8_t>(value & 0xFF);
-    unsigned ones = 0;
-    for (unsigned i = 0; i < 8; ++i) ones += (low >> i) & 1u;
-    if ((ones & 1u) == 0) regs_.flags |= Parity;
 }
 
 void Cpu::step() {
@@ -106,8 +103,8 @@ void Cpu::step() {
         return;
     }
 
-    last_error_ = "unsupported opcode 0x";
     constexpr char digits[] = "0123456789ABCDEF";
+    last_error_ = "unsupported opcode 0x";
     last_error_ += digits[(opcode >> 4) & 0xF];
     last_error_ += digits[opcode & 0xF];
     halted_ = true;
