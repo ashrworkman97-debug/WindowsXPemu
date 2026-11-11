@@ -592,11 +592,9 @@ void Cpu::step() {
                 regs_.eax = 0x00000673u; // family 6, model 7, stepping 3
                 regs_.ebx = 0;
                 regs_.ecx = 0;
-                regs_.edx = (1u << 0) | (1u << 1) | (1u << 2) | (1u << 3) |
-                            (1u << 4) | (1u << 5) | (1u << 6) | (1u << 7) |
-                            (1u << 8) | (1u << 9) | (1u << 11) | (1u << 12) |
-                            (1u << 13) | (1u << 14) | (1u << 15) | (1u << 16) |
-                            (1u << 17) | (1u << 23) | (1u << 24) | (1u << 25);
+                // Advertise only TSC: other Pentium-class features are not
+                // enabled until their instructions/devices are actually modeled.
+                regs_.edx = (1u << 4);
             } else {
                 regs_.eax = regs_.ebx = regs_.ecx = regs_.edx = 0;
             }
